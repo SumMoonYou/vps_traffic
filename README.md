@@ -3,7 +3,7 @@
 ✅ 使用说明
 - 下载脚本
   ```
-  wget -N --no-check-certificate "https://raw.githubusercontent.com/SumMoonYou/vps_traffic/refs/heads/main/vps_vnstat_telegram.sh" && chmod +x /usr/local/bin/vps_vnstat_telegram.sh && .//usr/local/bin/vps_vnstat_telegram.sh
+  bash -c "$(curl -L https://raw.githubusercontent.com/SumMoonYou/vps_traffic/refs/heads/main/vps_vnstat_telegram.sh)" @ install
   ```
   
 - 按提示输入：
