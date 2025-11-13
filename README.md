@@ -29,5 +29,5 @@
   ```
   sudo crontab -e
   
-  59 23 * * * /usr/local/bin/vps_vnstat_telegram.sh >/dev/null 2>&1
+  59 23 * * * /root/vps_traffic.sh >/dev/null 2>&1
   ```
