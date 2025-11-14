@@ -8,7 +8,7 @@
   
 - 按提示输入：
  • 每月流量重置日期
- • Telegram Bot Token
+ •Telegram Bot Token
  • Telegram Chat ID
  • 每日提醒时间（小时/分钟）
  • 当月总流量阈值（单位 MB，0 为不提醒）
