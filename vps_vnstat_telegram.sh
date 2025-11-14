@@ -8,9 +8,78 @@ echo "vnStat Telegram 流量统计一键安装脚本"
 echo "=============================="
 
 # 安装依赖
-echo "正在安装 vnStat、jq 和 bc..."
-sudo apt update
-sudo apt install -y vnstat jq curl bc
+#echo "正在安装 vnStat、jq 和 bc..."
+#sudo apt update
+#sudo apt install -y vnstat jq curl bc
+
+echo "正在检查系统类型..."
+# 读取系统信息
+if [ -f /etc/os-release ]; then
+    . /etc/os-release
+    OS=$ID            # ubuntu、debian、centos、fedora、rhel、alpine 等
+    OS_LIKE=$ID_LIKE  # debian、rhel 等
+else
+    echo "无法判断系统类型！"
+    exit 1
+fi
+echo "检测到系统: $OS (like: $OS_LIKE)"
+install_debian() {
+    echo "使用 apt 安装依赖..."
+    sudo apt update
+    sudo apt install -y vnstat jq curl bc
+}
+install_rhel() {
+    echo "使用 yum / dnf 安装依赖..."
+    if command -v dnf &>/dev/null; then
+        sudo dnf install -y vnstat jq curl bc
+    else
+        sudo yum install -y vnstat jq curl bc
+    fi
+}
+install_fedora() {
+    echo "使用 dnf 安装依赖..."
+    sudo dnf install -y vnstat jq curl bc
+}
+install_alpine() {
+    echo "使用 apk 安装依赖..."
+    sudo apk update
+    sudo apk add vnstat jq curl bc
+}
+install_openwrt() {
+    echo "使用 opkg 安装依赖..."
+    opkg update
+    opkg install vnstat jq curl bc
+}
+# 判断系统
+case "$OS" in
+    ubuntu|debian)
+        install_debian
+        ;;
+    centos|rhel)
+        install_rhel
+        ;;
+    fedora)
+        install_fedora
+        ;;
+    alpine)
+        install_alpine
+        ;;
+    openwrt)
+        install_openwrt
+        ;;
+    *)
+        # 有些系统 OS 识别不准确，用 ID_LIKE 兜底
+        if [[ "$OS_LIKE" == *"debian"* ]]; then
+            install_debian
+        elif [[ "$OS_LIKE" == *"rhel"* ]]; then
+            install_rhel
+        else
+            echo "未知系统：$OS，无法自动安装！"
+            exit 1
+        fi
+        ;;
+esac
+echo "依赖安装完成！"
 
 # 如果配置文件存在，读取变量
 if [ -f "$CONFIG_FILE" ]; then
