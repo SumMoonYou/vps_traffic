@@ -1,212 +1,232 @@
 #!/bin/bash
-# VPS vnStat Telegram 流量统计安装配置脚本（带配置文件，手动+定时+月度）
+# install_vps_vnstat_telegram.sh
+# 一键安装 + 美化 vnStat Telegram 流量统计（动态渐变条 + 彩色箭头标记）
+set -euo pipefail
+IFS=$'\n\t'
 
 CONFIG_FILE="/etc/vps_vnstat_config.conf"
+STATE_DIR="/var/lib/vps_vnstat_telegram"
+STATE_FILE="$STATE_DIR/state.json"
+SCRIPT_PATH="/usr/local/bin/vps_vnstat_telegram.sh"
+SERVICE_NAME="vps_vnstat_telegram.service"
+TIMER_NAME="vps_vnstat_telegram.timer"
+SERVICE_PATH="/etc/systemd/system/$SERVICE_NAME"
+TIMER_PATH="/etc/systemd/system/$TIMER_NAME"
 
-echo "=============================="
-echo "vnStat Telegram 流量统计一键安装脚本"
-echo "=============================="
+info() { echo -e "[\e[32mINFO\e[0m] $*"; }
+warn() { echo -e "[\e[33mWARN\e[0m] $*"; }
+err()  { echo -e "[\e[31mERR\e[0m] $*"; }
 
-# 安装依赖
-#echo "正在安装 vnStat、jq 和 bc..."
-#sudo apt update
-#sudo apt install -y vnstat jq curl bc
+[ "$(id -u)" -ne 0 ] && { err "请以 root 用户或 sudo 运行"; exit 1; }
 
-echo "正在检查系统类型..."
-# 读取系统信息
-if [ -f /etc/os-release ]; then
+# ---------- 系统检测 & 安装依赖 ----------
+install_debian() { info "使用 apt 安装依赖"; apt update -y; apt install -y vnstat jq curl bc; }
+install_rhel() { info "使用 yum/dnf 安装依赖"; command -v dnf &>/dev/null && dnf install -y vnstat jq curl bc || (yum install -y epel-release; yum install -y vnstat jq curl bc); }
+install_fedora() { info "使用 dnf 安装依赖"; dnf install -y vnstat jq curl bc; }
+install_alpine() { info "使用 apk 安装依赖"; apk update; apk add vnstat jq curl bc; }
+install_openwrt() { info "使用 opkg 安装依赖"; opkg update; opkg install vnstat jq curl bc; }
+
+detect_and_install() {
+    [ -f /etc/os-release ] || { err "无法识别系统"; exit 1; }
     . /etc/os-release
-    OS=$ID            # ubuntu、debian、centos、fedora、rhel、alpine 等
-    OS_LIKE=$ID_LIKE  # debian、rhel 等
-else
-    echo "无法判断系统类型！"
-    exit 1
-fi
-echo "检测到系统: $OS (like: $OS_LIKE)"
-install_debian() {
-    echo "使用 apt 安装依赖..."
-    sudo apt update
-    sudo apt install -y vnstat jq curl bc
+    info "检测系统: $ID (like: ${ID_LIKE:-})"
+    case "$ID" in
+        ubuntu|debian) install_debian ;;
+        centos|rhel) install_rhel ;;
+        fedora) install_fedora ;;
+        alpine) install_alpine ;;
+        openwrt) install_openwrt ;;
+        *) [[ "$ID_LIKE" == *"debian"* ]] && install_debian || [[ "$ID_LIKE" == *"rhel"* ]] && install_rhel || warn "未知系统，尝试 apt 安装"; install_debian || warn "自动安装失败";;
+    esac
 }
-install_rhel() {
-    echo "使用 yum / dnf 安装依赖..."
-    if command -v dnf &>/dev/null; then
-        sudo dnf install -y vnstat jq curl bc
+
+# ---------- 配置 ----------
+create_or_read_config() {
+    if [ -f "$CONFIG_FILE" ]; then
+        info "读取配置 $CONFIG_FILE"
+        source "$CONFIG_FILE"
+        : "${RESET_DAY:?配置文件缺少 RESET_DAY}"
+        : "${BOT_TOKEN:?配置文件缺少 BOT_TOKEN}"
+        : "${CHAT_ID:?配置文件缺少 CHAT_ID}"
+        : "${MONTH_LIMIT_GB:=0}"
+        : "${DAILY_HOUR:=0}"
+        : "${DAILY_MIN:=0}"
+        : "${IFACE:=''}"
+        : "${ALERT_PERCENT:=10}"
     else
-        sudo yum install -y vnstat jq curl bc
-    fi
-}
-install_fedora() {
-    echo "使用 dnf 安装依赖..."
-    sudo dnf install -y vnstat jq curl bc
-}
-install_alpine() {
-    echo "使用 apk 安装依赖..."
-    sudo apk update
-    sudo apk add vnstat jq curl bc
-}
-install_openwrt() {
-    echo "使用 opkg 安装依赖..."
-    opkg update
-    opkg install vnstat jq curl bc
-}
-# 判断系统
-case "$OS" in
-    ubuntu|debian)
-        install_debian
-        ;;
-    centos|rhel)
-        install_rhel
-        ;;
-    fedora)
-        install_fedora
-        ;;
-    alpine)
-        install_alpine
-        ;;
-    openwrt)
-        install_openwrt
-        ;;
-    *)
-        # 有些系统 OS 识别不准确，用 ID_LIKE 兜底
-        if [[ "$OS_LIKE" == *"debian"* ]]; then
-            install_debian
-        elif [[ "$OS_LIKE" == *"rhel"* ]]; then
-            install_rhel
-        else
-            echo "未知系统：$OS，无法自动安装！"
-            exit 1
-        fi
-        ;;
-esac
-echo "依赖安装完成！"
+        info "创建新配置"
+        DEFAULT_IFACE=$(ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | egrep -v "lo|vir|wl|docker|veth" | head -n1 || true)
+        [ -z "$DEFAULT_IFACE" ] && DEFAULT_IFACE="eth0"
+        while true; do read -rp "每月流量重置日(1-31): " RESET_DAY; [[ "$RESET_DAY" =~ ^[1-9]$|^[12][0-9]$|^3[01]$ ]] && break; echo "请输入1-31"; done
+        read -rp "Telegram Bot Token: " BOT_TOKEN
+        read -rp "Telegram Chat ID: " CHAT_ID
+        while true; do read -rp "月度总流量(GB,0无限): " MONTH_LIMIT_GB; [[ "$MONTH_LIMIT_GB" =~ ^[0-9]+([.][0-9]+)?$ ]] && break; echo "请输入数字"; done
+        while true; do read -rp "每日提醒时间-小时(0-23): " DAILY_HOUR; [[ "$DAILY_HOUR" =~ ^([0-9]|1[0-9]|2[0-3])$ ]] && break; done
+        while true; do read -rp "每日提醒时间-分钟(0-59): " DAILY_MIN; [[ "$DAILY_MIN" =~ ^([0-9]|[1-5][0-9])$ ]] && break; done
+        read -rp "监控网卡(默认 $DEFAULT_IFACE): " IFACE; IFACE=${IFACE:-$DEFAULT_IFACE}
+        read -rp "剩余流量告警百分比(默认10,0不告警): " ALERT_PERCENT; ALERT_PERCENT=${ALERT_PERCENT:-10}
 
-# 如果配置文件存在，读取变量
-if [ -f "$CONFIG_FILE" ]; then
-    echo "读取已有配置文件..."
-    source "$CONFIG_FILE"
-else
-    # 用户输入配置
-    read -p "请输入每月流量重置日期（1-28/30/31）: " RESET_DAY
-    read -p "请输入 Telegram Bot Token: " BOT_TOKEN
-    read -p "请输入 Telegram Chat ID: " CHAT_ID
-    read -p "请输入每日提醒时间（小时，0-23）: " DAILY_HOUR
-    read -p "请输入每日提醒时间（分钟，0-59）: " DAILY_MIN
-    # 默认网卡检测
-    DEFAULT_IFACE=$(ip link show | awk -F: '$0 !~ "lo|vir|wl|docker|^[^0-9]"{print $2; exit}' | tr -d ' ')
-    read -p "请输入要监控的网卡名称（默认: $DEFAULT_IFACE）: " IFACE
-    IFACE=${IFACE:-$DEFAULT_IFACE}
-
-    # 保存到配置文件
-    sudo tee "$CONFIG_FILE" >/dev/null <<EOF
+        cat > "$CONFIG_FILE" <<EOF
 RESET_DAY=$RESET_DAY
 BOT_TOKEN="$BOT_TOKEN"
 CHAT_ID="$CHAT_ID"
+MONTH_LIMIT_GB=$MONTH_LIMIT_GB
 DAILY_HOUR=$DAILY_HOUR
 DAILY_MIN=$DAILY_MIN
 IFACE="$IFACE"
+ALERT_PERCENT=$ALERT_PERCENT
 EOF
-    sudo chmod 600 "$CONFIG_FILE"
-    echo "配置已保存到 $CONFIG_FILE"
-fi
-
-# 创建 vnStat Telegram 脚本
-SCRIPT_PATH="/usr/local/bin/vps_vnstat_telegram.sh"
-echo "生成 vnStat Telegram 脚本到 $SCRIPT_PATH ..."
-sudo tee $SCRIPT_PATH >/dev/null <<EOF
-#!/bin/bash
-CONFIG_FILE="$CONFIG_FILE"
-source "\$CONFIG_FILE"
-
-TG_API="https://api.telegram.org/bot\$BOT_TOKEN/sendMessage"
-
-HOST_NAME=\$(hostname)
-VPS_IP=\$(curl -s https://api.ipify.org 2>/dev/null)
-[ -z "\$VPS_IP" ] && VPS_IP="无法获取"
-
-CUR_DATE=\$(date +"%Y-%m-%d %H:%M:%S")
-CUR_MONTH=\$(date +%Y)
-DAY_OF_MONTH=\$(date +%d)
-
-format_bytes_int() {
-    local bytes=\$1
-    [ -z "\$bytes" ] && bytes=0
-    if ! [[ "\$bytes" =~ ^[0-9]+$ ]]; then
-        bytes=0
+        chmod 600 "$CONFIG_FILE"
+        info "配置已保存 $CONFIG_FILE"
     fi
-    local unit=("B" "KB" "MB" "GB" "TB")
-    local i=0
-    while [ \$bytes -ge 1024 ] && [ \$i -lt 4 ]; do
-        bytes=\$((bytes / 1024))
-        i=\$((i + 1))
-    done
-    echo "\${bytes}\${unit[\$i]}"
 }
 
-# 日流量
-DAY_RX_BYTES=\$(vnstat -i \$IFACE --json 2>/dev/null | jq '.interfaces[0].traffic.day[-1].rx // 0')
-DAY_TX_BYTES=\$(vnstat -i \$IFACE --json 2>/dev/null | jq '.interfaces[0].traffic.day[-1].tx // 0')
-DAY_TOTAL_BYTES=\$((DAY_RX_BYTES + DAY_TX_BYTES))
+# ---------- 主脚本 ----------
+generate_main_script() {
+info "生成主脚本 $SCRIPT_PATH ..."
+mkdir -p "$STATE_DIR"; chmod 700 "$STATE_DIR"
 
-# 月流量
-MONTH_RX_BYTES=\$(vnstat -i \$IFACE --json 2>/dev/null | jq '.interfaces[0].traffic.month[-1].rx // 0')
-MONTH_TX_BYTES=\$(vnstat -i \$IFACE --json 2>/dev/null | jq '.interfaces[0].traffic.month[-1].tx // 0')
-MONTH_TOTAL_BYTES=\$((MONTH_RX_BYTES + MONTH_TX_BYTES))
+cat > "$SCRIPT_PATH" <<'EOSCRIPT'
+#!/bin/bash
+set -euo pipefail
+IFS=$'\n\t'
 
-# 转换单位
-DAY_RX=\$(format_bytes_int \$DAY_RX_BYTES)
-DAY_TX=\$(format_bytes_int \$DAY_TX_BYTES)
-DAY_TOTAL=\$(format_bytes_int \$DAY_TOTAL_BYTES)
+CONFIG_FILE="/etc/vps_vnstat_config.conf"
+STATE_DIR="/var/lib/vps_vnstat_telegram"
+STATE_FILE="$STATE_DIR/state.json"
+source "$CONFIG_FILE"
 
-MONTH_RX_GB=\$(awk "BEGIN {printf \"%.2f\", \$MONTH_RX_BYTES/1024/1024/1024}")
-MONTH_TX_GB=\$(awk "BEGIN {printf \"%.2f\", \$MONTH_TX_BYTES/1024/1024/1024}")
-MONTH_TOTAL_GB=\$(awk "BEGIN {printf \"%.2f\", \$MONTH_TOTAL_BYTES/1024/1024/1024}")
+MONTH_LIMIT_BYTES=$(awk -v g="$MONTH_LIMIT_GB" 'BEGIN{printf("%.0f", g*1024*1024*1024)}')
+ALERT_PERCENT=${ALERT_PERCENT:-10}
+IFACE=${IFACE:-eth0}
 
-# 发送 Telegram 消息函数
-send_message() {
-    local MSG="\$1"
-    curl -s -X POST "\$TG_API" \
-        -d chat_id="\$CHAT_ID" \
-        -d parse_mode="Markdown" \
-        -d text="\$MSG" >/dev/null 2>&1
+TG_API_BASE="https://api.telegram.org/bot${BOT_TOKEN}/sendMessage"
+HOST_NAME=$(hostname)
+VPS_IP=$(curl -fsS https://api.ipify.org || echo "无法获取")
+
+escape_md(){ local s="$1"; s="${s//_/\\_}"; s="${s//*/\\*}"; s="${s//#/\\#}"; echo "$s"; }
+format_bytes(){ awk -v b="$1" 'BEGIN{split("B KB MB GB TB",u," ");i=0;while(b>=1024&&i<4){b/=1024;i++} if(i==0){printf "%d%s",int(b+0.5),u[i+1]}else{printf "%.2f%s",b,u[i+1]}}'; }
+
+get_vnstat_today_bytes(){ local rx tx total; rx=$(vnstat -i "$1" --json | jq '.interfaces[0].traffic.day[-1].rx//0'); tx=$(vnstat -i "$1" --json | jq '.interfaces[0].traffic.day[-1].tx//0'); total=$((rx+tx)); echo "$rx $tx $total"; }
+get_vnstat_cumulative_bytes(){ vnstat -i "$1" --json | jq '[.interfaces[0].traffic.day[]?|(.rx+ .tx)]|add//0'; }
+
+init_state_if_missing(){ [ ! -f "$STATE_FILE" ] && echo "{\"last_snapshot_date\":\"$(date +%Y-%m-%d)\",\"snapshot_bytes\":$(get_vnstat_cumulative_bytes "$IFACE")}" > "$STATE_FILE" && chmod 600 "$STATE_FILE"; }
+read_snapshot(){ SNAP_DATE=$(jq -r '.last_snapshot_date // empty' "$STATE_FILE"); SNAP_BYTES=$(jq -r '.snapshot_bytes // 0' "$STATE_FILE"); }
+write_snapshot(){ echo "{\"last_snapshot_date\":\"$(date +%Y-%m-%d)\",\"snapshot_bytes\":$1}" > "$STATE_FILE"; chmod 600 "$STATE_FILE"; }
+
+send_message(){
+    local USED=$1 REMAIN=$2 PCT=$3 SNAP_START=$4 SNAP_END=$5 TODAY_RX=$6 TODAY_TX=$7 TODAY_TOTAL=$8 WIDTH=20
+    # 动态颜色
+    if [ "$PCT" -le 50 ]; then BAR_CHAR="🟩"
+    elif [ "$PCT" -le 80 ]; then BAR_CHAR="🟧"
+    else BAR_CHAR="🟥"
+    fi
+
+    local FILLED=$(( PCT*WIDTH/100 )); [ $FILLED -gt $WIDTH ] && FILLED=$WIDTH
+    local EMPTY=$((WIDTH-FILLED))
+    local BAR=$(printf "${BAR_CHAR}%.0s" $(seq 1 $FILLED))$(printf "⬜%.0s" $(seq 1 $EMPTY))
+    local STATUS="✅"; [ "$PCT" -ge 90 ] && STATUS="⚠️"
+
+    local TODAY_PCT=0
+    [ "$MONTH_LIMIT_BYTES" -gt 0 ] && TODAY_PCT=$(( TODAY_TOTAL*100/MONTH_LIMIT_BYTES ))
+    local TODAY_BAR=$(printf "🟦%.0s" $(seq 1 $((TODAY_PCT*WIDTH/100))))$(printf "⬜%.0s" $(seq 1 $((WIDTH - TODAY_PCT*WIDTH/100))))
+    local TODAY_STATUS="✅"; [ "$TODAY_PCT" -ge 100 ] && TODAY_STATUS="⚠️"
+
+    MSG="📊 *VPS 流量日报* ────────────────
+🖥️ 主机: $(escape_md "$HOST_NAME")   🌐 IP: $(escape_md "$VPS_IP")
+💾 网卡: $(escape_md "$IFACE")   ⏰ $(date +"%Y-%m-%d %H:%M:%S")
+
+🔹 *今日流量*
+⬇️ 下载: ${TODAY_RX}GB   ⬆️ 上传: ${TODAY_TX}GB   📦 总计: ${TODAY_TOTAL}GB
+📊 进度: ${TODAY_BAR} ${TODAY_PCT}%   ⚡ 状态: ${TODAY_STATUS}
+
+🔸 *本周期流量 (${SNAP_START} → ${SNAP_END})*
+📌 已用: ${USED}GB   剩余: ${REMAIN}GB / 总量 ${MONTH_LIMIT_GB}GB
+📊 进度: ${BAR} ${PCT}%   ⚡ 流量状态: ${STATUS}
+─────────────────────────────"
+
+    curl -s -X POST "$TG_API_BASE" \
+        -d chat_id="$CHAT_ID" \
+        --data-urlencode "parse_mode=Markdown" \
+        --data-urlencode "text=$MSG" >/dev/null 2>&1
 }
 
-# 每日流量推送
-MSG="📊 *VPS 流量日报*
-🖥️ 主机: \$HOST_NAME
-🌐 IP: \$VPS_IP
-⏰ 时间: \$CUR_DATE
-💾 网卡: \$IFACE
-⬇️ 下载: \$DAY_RX
-⬆️ 上传: \$DAY_TX
-📦 当日总计: \$DAY_TOTAL
-🔁 每月重置日: \$RESET_DAY 号"
-send_message "\$MSG"
+main(){
+    init_state_if_missing
+    read_snapshot
+    read DAY_RX DAY_TX DAY_TOTAL < <(get_vnstat_today_bytes "$IFACE")
+    CUR_SUM=$(get_vnstat_cumulative_bytes "$IFACE")
+    USED_BYTES=$((CUR_SUM-SNAP_BYTES)); [ $USED_BYTES -lt 0 ] && USED_BYTES=0
+    REMAIN_BYTES=$((MONTH_LIMIT_BYTES-USED_BYTES)); [ $REMAIN_BYTES -lt 0 ] && REMAIN_BYTES=0
 
-# 每月汇总
-if [ "\$DAY_OF_MONTH" = "\$RESET_DAY" ]; then
-    MONTH_MSG="📊 *VPS 月度流量汇总*
-🖥️ 主机: \$HOST_NAME
-🌐 IP: \$VPS_IP
-📅 月份: \$CUR_MONTH
-⬇️ 下载: \${MONTH_RX_GB}GB
-⬆️ 上传: \${MONTH_TX_GB}GB
-📦 总计: \${MONTH_TOTAL_GB}GB"
-    send_message "\$MONTH_MSG"
-fi
+    USED_GB=$(awk "BEGIN{printf \"%.2f\", $USED_BYTES/1024/1024/1024}")
+    REMAIN_GB=$(awk "BEGIN{printf \"%.2f\", $REMAIN_BYTES/1024/1024/1024}")
+    DAY_RX_GB=$(awk "BEGIN{printf \"%.2f\", $DAY_RX/1024/1024/1024}")
+    DAY_TX_GB=$(awk "BEGIN{printf \"%.2f\", $DAY_TX/1024/1024/1024}")
+    DAY_TOTAL_GB=$(awk "BEGIN{printf \"%.2f\", $DAY_TOTAL/1024/1024/1024}")
+    PCT=$((USED_BYTES*100/MONTH_LIMIT_BYTES)); [ "$MONTH_LIMIT_BYTES" -le 0 ] && PCT=0
+
+    send_message "$USED_GB" "$REMAIN_GB" "$PCT" "$SNAP_DATE" "$(date +%Y-%m-%d)" "$DAY_RX_GB" "$DAY_TX_GB" "$DAY_TOTAL_GB"
+
+    TODAY_DAY=$(date +%d | sed 's/^0*//')
+    [ "$TODAY_DAY" -eq "$RESET_DAY" ] && write_snapshot "$CUR_SUM"
+}
+
+main "$@"
+EOSCRIPT
+
+chmod 750 "$SCRIPT_PATH"
+info "主脚本生成完成"
+
+# ---------- systemd timer ----------
+generate_systemd_unit(){
+    source "$CONFIG_FILE"
+    H=$(printf "%02d" "$DAILY_HOUR")
+    M=$(printf "%02d" "$DAILY_MIN")
+    ONCAL="*-*-* ${H}:${M}:00"
+
+    cat > "$SERVICE_PATH" <<EOF
+[Unit]
+Description=VPS vnStat Telegram daily report
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=$SCRIPT_PATH
 EOF
 
-sudo chmod +x $SCRIPT_PATH
+    cat > "$TIMER_PATH" <<EOF
+[Unit]
+Description=Daily timer for vps_vnstat_telegram
 
-# 添加 Cron 定时任务
-CRON_JOB="$DAILY_MIN $DAILY_HOUR * * * $SCRIPT_PATH >/dev/null 2>&1"
-(crontab -l 2>/dev/null | grep -v "$SCRIPT_PATH"; echo "$CRON_JOB") | crontab -
+[Timer]
+OnCalendar=$ONCAL
+Persistent=true
 
-echo "=============================="
-echo "安装配置完成！"
-echo "每日提醒已设置为 $DAILY_HOUR:$DAILY_MIN"
-echo "可手动发送即时流量通知:"
-echo "  sudo $SCRIPT_PATH"
-echo "配置文件路径: $CONFIG_FILE"
-echo "脚本路径: $SCRIPT_PATH"
-echo "=============================="
+[Install]
+WantedBy=timers.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable --now "$(basename "$TIMER_PATH")" || true
+    systemctl start "$(basename "$TIMER_PATH")" || true
+    info "systemd timer 已启用"
+}
+
+ensure_vnstat_running_and_initialized(){
+    command -v vnstat &>/dev/null || return
+    vnstat --create -i "$IFACE" 2>/dev/null || true
+    vnstat -u -i "$IFACE" 2>/dev/null || true
+}
+
+main_install(){
+    detect_and_install
+    create_or_read_config
+    mkdir -p "$STATE_DIR"; chmod 700 "$STATE_DIR"
+    ensure_vnstat_running_and_initialized
+    generate_main_script
+    command -v systemctl &>/dev/null && systemctl --version &>/dev/null && generate_systemd_unit || warn "使用 crontab 备选"
+    info "安装完成！手动运行: sudo $SCRIPT_PATH"
+}
+
+main_install
