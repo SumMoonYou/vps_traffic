@@ -18,7 +18,6 @@ fi
 # shellcheck source=/dev/null
 source "$CONFIG_FILE"
 
-# 默认值保护
 MONTH_LIMIT_GB=${MONTH_LIMIT_GB:-0}
 ALERT_PERCENT=${ALERT_PERCENT:-10}
 RESET_DAY=${RESET_DAY:-1}
@@ -36,7 +35,7 @@ get_public_ip() {
         ip=$(curl -fsS --max-time 6 "$url" 2>/dev/null || echo "")
         [ -n "$ip" ] && echo "$ip" && return
     done
-    echo "无法获取"
+    echo "未知IP"
 }
 VPS_IP=$(get_public_ip)
 
@@ -61,9 +60,9 @@ escape_md() {
     echo "$s"
 }
 
-HOST_NAME_ESC=$(escape_md "$(hostname)")
+HOST_NAME_ESC=$(escape_md "$(hostname -f || hostname || echo '未知主机')")
 VPS_IP_ESC=$(escape_md "$VPS_IP")
-IFACE_ESC=$(escape_md "$IFACE")
+IFACE_ESC=$(escape_md "${IFACE:-eth0}")
 
 # -----------------------------
 # 流量单位转换
@@ -156,7 +155,7 @@ send_message() {
 }
 
 # -----------------------------
-# 美化消息模板
+# 美化消息模板（进度条缩短10格）
 # -----------------------------
 generate_tg_message() {
     local title="$1"
@@ -169,7 +168,7 @@ generate_tg_message() {
     local limit="$8"
     local pct="$9"
 
-    local bar_len=20
+    local bar_len=10
     local filled=$(( pct * bar_len / 100 ))
     [ "$filled" -gt "$bar_len" ] && filled=$bar_len
     local empty=$(( bar_len - filled ))
@@ -182,9 +181,7 @@ generate_tg_message() {
     [ "$pct" -ge 90 ] && [ "$pct" -lt 100 ] && status="⚡️ 接近上限"
 
     cat <<EOF
-╔═════════════════════╗
-        ${title}
-╚═════════════════════╝
+📊 ${title}
 
 🖥️ 主机: ${HOST_NAME_ESC}
 🌐 IP: ${VPS_IP_ESC}
@@ -200,8 +197,7 @@ generate_tg_message() {
 📌 已使用 : ${used}
 📌 剩余 : ${remain} / ${limit}
 
-📊 进度 : 
-[${bar}] ${pct}%
+📊 进度 : ${bar} ${pct}%
 ⚡️ 流量状态: ${status}
 EOF
 }
@@ -230,18 +226,15 @@ main() {
     REMAIN_H=$(format_bytes "$REMAIN_BYTES")
     LIMIT_H=$(format_bytes "$MONTH_LIMIT_BYTES")
 
-    # 剩余百分比
     PCT_REMAIN=0
     [ "$MONTH_LIMIT_BYTES" -gt 0 ] && PCT_REMAIN=$(( REMAIN_BYTES * 100 / MONTH_LIMIT_BYTES ))
 
     CUR_DATE=$(date +"%Y-%m-%d %H:%M:%S")
     SNAP_DATE_ESC=$(escape_md "${SNAP_DATE:-起始}")
 
-    # 每日推送
     MSG=$(generate_tg_message "VPS 流量日报" "$CUR_DATE" "$DAY_RX_H" "$DAY_TX_H" "$DAY_TOTAL_H" "$USED_H" "$REMAIN_H" "$LIMIT_H" "$PCT_REMAIN")
     send_message "$MSG"
 
-    # 月度周期汇总
     TODAY_DAY=$(date +%d | sed 's/^0*//')
     if [ "$TODAY_DAY" -eq "$RESET_DAY" ]; then
         PERIOD_END=$(date +"%Y-%m-%d")
