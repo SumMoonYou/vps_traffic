@@ -127,33 +127,38 @@ EOF
 # 流量状态判断
 # -----------------------------
 get_flow_status() {
-    local pct_remain="$1"
+    local used_pct="$1"
     local alert_percent="$2"
     local status="✅ 正常"
 
-    if [ "$pct_remain" -le "$alert_percent" ] && [ "$alert_percent" -gt 0 ]; then
-        status="⚠️ 剩余流量低于 ${alert_percent}%！"
-    elif [ "$pct_remain" -le 20 ]; then
+    if [ "$used_pct" -ge 80 ]; then
         status="⚡️ 接近上限"
+    fi
+    if [ "$used_pct" -ge 100 ] || ([ "$used_pct" -ge "$((100 - alert_percent))" ] && [ "$alert_percent" -gt 0 ]); then
+        status="⚠️ 流量警告"
     fi
     echo "$status"
 }
 
 # -----------------------------
-# 进度条生成
+# 进度条生成（根据已用百分比）
 # -----------------------------
 generate_progress_bar() {
-    local pct="$1"
+    local used_pct="$1"
     local len=10
-    local filled=$((pct * len / 100))
+    local filled=$((used_pct * len / 100))
     [ "$filled" -gt "$len" ] && filled=$len
     local empty=$((len - filled))
     local bar=""
     
     local color
-    if [ "$pct" -le 50 ]; then color="🟩"
-    elif [ "$pct" -le 80 ]; then color="🟨"
-    else color="🟥"; fi
+    if [ "$used_pct" -le 50 ]; then
+        color="🟩"
+    elif [ "$used_pct" -le 80 ]; then
+        color="🟨"
+    else
+        color="🟥"
+    fi
     
     for ((i=0;i<filled;i++)); do bar+="$color"; done
     for ((i=0;i<empty;i++)); do bar+="⬜️"; done
@@ -183,10 +188,10 @@ generate_tg_message() {
     local used="$6"
     local remain="$7"
     local limit="$8"
-    local pct="$9"
+    local used_pct="$9"
 
-    local bar=$(generate_progress_bar "$pct")
-    local status=$(get_flow_status "$pct" "$ALERT_PERCENT")
+    local bar=$(generate_progress_bar "$used_pct")
+    local status=$(get_flow_status "$used_pct" "$ALERT_PERCENT")
 
     cat <<EOF
 📊 ${title}
@@ -205,7 +210,7 @@ generate_tg_message() {
 📌 已使用 : ${used}
 📌 剩余 : ${remain} / ${limit}
 
-📊 进度 : ${bar} ${pct}%
+📊 进度 : ${bar} ${used_pct}%
 ⚡️ 流量状态: ${status}
 EOF
 }
@@ -237,21 +242,21 @@ main() {
     REMAIN_H=$(format_bytes "$REMAIN_BYTES")
     LIMIT_H=$(format_bytes "$MONTH_LIMIT_BYTES")
 
-    PCT_REMAIN=0
-    [ "$MONTH_LIMIT_BYTES" -gt 0 ] && PCT_REMAIN=$(( REMAIN_BYTES*100/MONTH_LIMIT_BYTES ))
+    USED_PCT=0
+    [ "$MONTH_LIMIT_BYTES" -gt 0 ] && USED_PCT=$(( USED_BYTES*100/MONTH_LIMIT_BYTES ))
 
     CUR_DATE=$(date +"%Y-%m-%d %H:%M:%S")
     SNAP_DATE_ESC=$(escape_md "${SNAP_DATE:-起始}")
 
     # 日报
-    MSG=$(generate_tg_message "VPS 流量日报" "$CUR_DATE" "$DAY_RX_H" "$DAY_TX_H" "$DAY_TOTAL_H" "$USED_H" "$REMAIN_H" "$LIMIT_H" "$PCT_REMAIN")
+    MSG=$(generate_tg_message "VPS 流量日报" "$CUR_DATE" "$DAY_RX_H" "$DAY_TX_H" "$DAY_TOTAL_H" "$USED_H" "$REMAIN_H" "$LIMIT_H" "$USED_PCT")
     send_message "$MSG"
 
     # 周期汇总
     TODAY_DAY=$(date +%d | sed 's/^0*//')
     if [ "$TODAY_DAY" -eq "$RESET_DAY" ]; then
         PERIOD_END=$(date +"%Y-%m-%d")
-        PERIOD_MSG=$(generate_tg_message "VPS 流量周期汇总" "$PERIOD_END" "-" "-" "-" "$USED_H" "$REMAIN_H" "$LIMIT_H" "$PCT_REMAIN")
+        PERIOD_MSG=$(generate_tg_message "VPS 流量周期汇总" "$PERIOD_END" "-" "-" "-" "$USED_H" "$REMAIN_H" "$LIMIT_H" "$USED_PCT")
         send_message "$PERIOD_MSG"
         write_snapshot "$CUR_SUM"
     fi
