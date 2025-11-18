@@ -27,21 +27,13 @@ DAILY_HOUR=${DAILY_HOUR:-0}
 DAILY_MIN=${DAILY_MIN:-0}
 
 TG_API_BASE="https://api.telegram.org/bot${BOT_TOKEN}/sendMessage"
-HOST_NAME=$(hostname 2>/dev/null || echo "unknown")
+HOST_NAME=$(hostname 2>/dev/null || echo "未知主机")
 
-# 公网 IP 多源回退
-get_public_ip() {
-    for url in "https://api.ipify.org" "https://ifconfig.me" "https://ipinfo.io/ip" "https://ifconfig.co"; do
-        ip=$(curl -fsS --max-time 6 "$url" 2>/dev/null || echo "")
-        if [ -n "$ip" ]; then
-            echo "$ip"
-            return 0
-        fi
-    done
-    echo "无法获取"
-}
-
-VPS_IP=$(get_public_ip)
+# 获取公网 IP，多源回退，保证不会为空
+VPS_IP=$(curl -fsS --max-time 6 https://api.ipify.org 2>/dev/null || true)
+[ -z "$VPS_IP" ] && VPS_IP=$(curl -fsS --max-time 6 https://ifconfig.me 2>/dev/null || true)
+[ -z "$VPS_IP" ] && VPS_IP=$(curl -fsS --max-time 6 https://ifconfig.co 2>/dev/null || true)
+[ -z "$VPS_IP" ] && VPS_IP="无法获取"
 
 # 转义 Telegram Markdown
 escape_md() {
@@ -200,7 +192,7 @@ main() {
 
     CUR_DATE=$(date +"%Y-%m-%d %H:%M:%S")
     HOST_ESC=$(escape_md "$HOST_NAME")
-    IP_ESC=$(escape_md "$VPS_IP")
+    IP_ESC="$VPS_IP"   # IP 不转义
     IFACE_ESC=$(escape_md "$IFACE")
     SNAP_DATE_ESC=$(escape_md "${SNAP_DATE:-起始}")
 
