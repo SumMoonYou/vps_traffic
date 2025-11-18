@@ -15,7 +15,6 @@ if [ ! -f "$CONFIG_FILE" ]; then
     echo "配置文件缺失：$CONFIG_FILE"
     exit 1
 fi
-# shellcheck source=/dev/null
 source "$CONFIG_FILE"
 
 MONTH_LIMIT_GB=${MONTH_LIMIT_GB:-0}
@@ -24,8 +23,6 @@ RESET_DAY=${RESET_DAY:-1}
 IFACE=${IFACE:-eth0}
 BOT_TOKEN=${BOT_TOKEN:-}
 CHAT_ID=${CHAT_ID:-}
-DAILY_HOUR=${DAILY_HOUR:-0}
-DAILY_MIN=${DAILY_MIN:-0}
 
 # -----------------------------
 # 获取主机名 / IP / 网卡
@@ -35,7 +32,7 @@ VPS_IP=$(curl -fsS https://api.ipify.org 2>/dev/null || echo "未知IP")
 IFACE=${IFACE:-eth0}
 
 # -----------------------------
-# Markdown 转义 (只转义 \ 和 _)
+# Markdown 转义
 # -----------------------------
 escape_md() {
     local s="$1"
@@ -43,7 +40,6 @@ escape_md() {
     s="${s//_/\\_}"
     echo "$s"
 }
-
 HOST_NAME_ESC=$(escape_md "$HOST_NAME")
 VPS_IP_ESC=$(escape_md "$VPS_IP")
 IFACE_ESC=$(escape_md "$IFACE")
@@ -128,6 +124,43 @@ EOF
 }
 
 # -----------------------------
+# 流量状态判断
+# -----------------------------
+get_flow_status() {
+    local pct_remain="$1"
+    local alert_percent="$2"
+    local status="✅ 正常"
+
+    if [ "$pct_remain" -le "$alert_percent" ] && [ "$alert_percent" -gt 0 ]; then
+        status="⚠️ 剩余流量低于 ${alert_percent}%！"
+    elif [ "$pct_remain" -le 20 ]; then
+        status="⚡️ 接近上限"
+    fi
+    echo "$status"
+}
+
+# -----------------------------
+# 进度条生成
+# -----------------------------
+generate_progress_bar() {
+    local pct="$1"
+    local len=10
+    local filled=$((pct * len / 100))
+    [ "$filled" -gt "$len" ] && filled=$len
+    local empty=$((len - filled))
+    local bar=""
+    
+    local color
+    if [ "$pct" -le 50 ]; then color="🟩"
+    elif [ "$pct" -le 80 ]; then color="🟨"
+    else color="🟥"; fi
+    
+    for ((i=0;i<filled;i++)); do bar+="$color"; done
+    for ((i=0;i<empty;i++)); do bar+="⬜️"; done
+    echo "$bar"
+}
+
+# -----------------------------
 # Telegram 消息发送
 # -----------------------------
 send_message() {
@@ -139,7 +172,7 @@ send_message() {
 }
 
 # -----------------------------
-# 美化消息模板（进度条10格）
+# Telegram 消息模板
 # -----------------------------
 generate_tg_message() {
     local title="$1"
@@ -152,17 +185,8 @@ generate_tg_message() {
     local limit="$8"
     local pct="$9"
 
-    local bar_len=10
-    local filled=$(( pct * bar_len / 100 ))
-    [ "$filled" -gt "$bar_len" ] && filled=$bar_len
-    local empty=$(( bar_len - filled ))
-    local bar=""
-    for ((i=0;i<filled;i++)); do bar+="🟩"; done
-    for ((i=0;i<empty;i++)); do bar+="⬜️"; done
-
-    local status="✅ 正常"
-    [ "$pct" -ge 100 ] && status="⚠️ 超过限额"
-    [ "$pct" -ge 90 ] && [ "$pct" -lt 100 ] && status="⚡️ 接近上限"
+    local bar=$(generate_progress_bar "$pct")
+    local status=$(get_flow_status "$pct" "$ALERT_PERCENT")
 
     cat <<EOF
 📊 ${title}
@@ -193,7 +217,10 @@ main() {
     init_state_if_missing
     read_snapshot
 
+    # 今日流量
     read DAY_RX DAY_TX DAY_TOTAL < <(get_vnstat_today_bytes "$IFACE")
+
+    # 当前累计
     CUR_SUM=$(get_vnstat_cumulative_days_bytes "$IFACE")
     USED_BYTES=$(( CUR_SUM - SNAP_BYTES ))
     [ "$USED_BYTES" -lt 0 ] && USED_BYTES=0
@@ -211,14 +238,16 @@ main() {
     LIMIT_H=$(format_bytes "$MONTH_LIMIT_BYTES")
 
     PCT_REMAIN=0
-    [ "$MONTH_LIMIT_BYTES" -gt 0 ] && PCT_REMAIN=$(( REMAIN_BYTES * 100 / MONTH_LIMIT_BYTES ))
+    [ "$MONTH_LIMIT_BYTES" -gt 0 ] && PCT_REMAIN=$(( REMAIN_BYTES*100/MONTH_LIMIT_BYTES ))
 
     CUR_DATE=$(date +"%Y-%m-%d %H:%M:%S")
     SNAP_DATE_ESC=$(escape_md "${SNAP_DATE:-起始}")
 
+    # 日报
     MSG=$(generate_tg_message "VPS 流量日报" "$CUR_DATE" "$DAY_RX_H" "$DAY_TX_H" "$DAY_TOTAL_H" "$USED_H" "$REMAIN_H" "$LIMIT_H" "$PCT_REMAIN")
     send_message "$MSG"
 
+    # 周期汇总
     TODAY_DAY=$(date +%d | sed 's/^0*//')
     if [ "$TODAY_DAY" -eq "$RESET_DAY" ]; then
         PERIOD_END=$(date +"%Y-%m-%d")
