@@ -28,44 +28,28 @@ DAILY_HOUR=${DAILY_HOUR:-0}
 DAILY_MIN=${DAILY_MIN:-0}
 
 # -----------------------------
-# 公网 IP 获取
+# 获取主机名 / IP / 网卡
 # -----------------------------
-get_public_ip() {
-    for url in "https://api.ipify.org" "https://ifconfig.me" "https://ipinfo.io/ip" "https://ifconfig.co"; do
-        ip=$(curl -fsS --max-time 6 "$url" 2>/dev/null || echo "")
-        [ -n "$ip" ] && echo "$ip" && return
-    done
-    echo "未知IP"
-}
-VPS_IP=$(get_public_ip)
+HOST_NAME=$(hostname -f 2>/dev/null || hostname || echo "未知主机")
+VPS_IP=$(curl -fsS https://api.ipify.org 2>/dev/null || echo "未知IP")
+IFACE=${IFACE:-eth0}
 
 # -----------------------------
-# Markdown 转义
+# Markdown 转义 (只转义 \ 和 _)
 # -----------------------------
 escape_md() {
     local s="$1"
     s="${s//\\/\\\\}"
     s="${s//_/\\_}"
-    s="${s//*/\\*}"
-    s="${s//[/\\[}"
-    s="${s//]/\\]}"
-    s="${s//(/\\(}"
-    s="${s//)/\\)}"
-    s="${s//#/\\#}"
-    s="${s//+/\\+}"
-    s="${s//-/\\-}"
-    s="${s//=/\\=}"
-    s="${s//./\\.}"
-    s="${s//!/\\!}"
     echo "$s"
 }
 
-HOST_NAME_ESC=$(escape_md "$(hostname -f || hostname || echo '未知主机')")
+HOST_NAME_ESC=$(escape_md "$HOST_NAME")
 VPS_IP_ESC=$(escape_md "$VPS_IP")
-IFACE_ESC=$(escape_md "${IFACE:-eth0}")
+IFACE_ESC=$(escape_md "$IFACE")
 
 # -----------------------------
-# 流量单位转换
+# 字节格式化
 # -----------------------------
 format_bytes() {
     local bytes="$1"
@@ -155,7 +139,7 @@ send_message() {
 }
 
 # -----------------------------
-# 美化消息模板（进度条缩短10格）
+# 美化消息模板（进度条10格）
 # -----------------------------
 generate_tg_message() {
     local title="$1"
