@@ -1,120 +1,66 @@
 #!/bin/bash
-# vps_vnstat_telegram.sh
-# VPS vnStat Telegram 流量统计脚本（自动生成配置 + systemd timer/cron）
+# install_vps_vnstat.sh
+# 一键安装/卸载 VPS vnStat Telegram 流量日报脚本
+# 支持 systemd timer
 set -euo pipefail
 IFS=$'\n\t'
 
 CONFIG_FILE="/etc/vps_vnstat_config.conf"
+SCRIPT_FILE="/usr/local/bin/vps_vnstat_telegram.sh"
 STATE_DIR="/var/lib/vps_vnstat_telegram"
 STATE_FILE="$STATE_DIR/state.json"
-SCRIPT_PATH="/usr/local/bin/vps_vnstat_telegram.sh"
+SERVICE_FILE="/etc/systemd/system/vps_vnstat_telegram.service"
+TIMER_FILE="/etc/systemd/system/vps_vnstat_telegram.timer"
 
-# ---------------------------
-# helper functions
-# ---------------------------
-info() { echo -e "[INFO] $*"; }
-warn() { echo -e "[WARN] $*"; }
-err()  { echo -e "[ERR] $*"; }
+info() { echo -e "[\e[32mINFO\e[0m] $*"; }
+warn() { echo -e "[\e[33mWARN\e[0m] $*"; }
+err()  { echo -e "[\e[31mERR\e[0m] $*"; }
 
-escape_md() {
-    local s="$1"
-    s="${s//\\/\\\\}"
-    s="${s//_/\\_}"
-    s="${s//*/\\*}"
-    s="${s//[/\\[}"
-    s="${s//]/\\]}"
-    s="${s//(/\\(}"
-    s="${s//)/\\)}"
-    s="${s//#/\\#}"
-    s="${s//+/\\+}"
-    s="${s//-/\\-}"
-    s="${s//=/\\=}"
-    s="${s//./\\.}"
-    s="${s//!/\\!}"
-    echo "$s"
-}
+if [ "$(id -u)" -ne 0 ]; then
+    err "请以 root 用户运行。"
+    exit 1
+fi
 
-format_bytes() {
-    local bytes="$1"
-    if ! [[ "$bytes" =~ ^[0-9]+$ ]]; then bytes=0; fi
-    awk -v b="$bytes" 'BEGIN{
-        split("B KB MB GB TB", u, " ");
-        i=0;
-        while(b>=1024 && i<4){ b=b/1024; i++; }
-        if(i==0) { printf "%d%s", int(b+0.5), u[i+1]; }
-        else { printf "%.2f%s", b, u[i+1]; }
-    }'
-}
-
-generate_progress_bar() {
-    local pct="$1"
-    local full="🟩"
-    local empty="⬜️"
-    local length=10
-    local filled=$((pct*length/100))
-    [ "$filled" -gt "$length" ] && filled=$length
-    local bar=""
-    for ((i=0;i<filled;i++)); do bar+="$full"; done
-    for ((i=filled;i<length;i++)); do bar+="$empty"; done
-    echo "$bar"
-}
-
-get_flow_status() {
-    local pct="$1"
-    local alert="$2"
-    if [ "$pct" -ge 100 ]; then
-        echo "⚠️ 超过限额"
-    elif [ "$pct" -ge "$alert" ]; then
-        echo "⚡️ 接近上限"
+install_dependencies() {
+    if [ -f /etc/debian_version ]; then
+        apt update -y
+        apt install -y vnstat jq curl bc
+    elif [ -f /etc/alpine-release ]; then
+        apk add --no-cache vnstat jq curl bc
+    elif command -v yum &>/dev/null || command -v dnf &>/dev/null; then
+        if command -v dnf &>/dev/null; then
+            dnf install -y vnstat jq curl bc
+        else
+            yum install -y epel-release
+            yum install -y vnstat jq curl bc
+        fi
     else
-        echo "✅ 正常"
+        warn "未识别系统，请确保已安装 vnstat jq curl bc"
     fi
 }
 
-get_public_ip() {
-    for url in "https://api.ipify.org" "https://ifconfig.me" "https://ipinfo.io/ip" "https://ifconfig.co"; do
-        ip=$(curl -fsS --max-time 6 "$url" 2>/dev/null || echo "")
-        [ -n "$ip" ] && { echo "$ip"; return 0; }
-    done
-    echo "无法获取"
-}
-
-get_vnstat_today_bytes() {
-    local iface="$1"
-    local rx tx total
-    rx=$(vnstat -i "$iface" --json 2>/dev/null | jq '.interfaces[0].traffic.day[-1].rx // 0')
-    tx=$(vnstat -i "$iface" --json 2>/dev/null | jq '.interfaces[0].traffic.day[-1].tx // 0')
-    total=$((rx+tx))
-    echo "$rx $tx $total"
-}
-
-get_vnstat_cumulative_bytes() {
-    local iface="$1"
-    local sum
-    sum=$(vnstat -i "$iface" --json 2>/dev/null | jq '[.interfaces[0].traffic.day[]? | ((.rx // 0) + (.tx // 0))] | add // 0')
-    echo "${sum:-0}"
-}
-
-# ---------------------------
-# 自动生成配置文件（如果不存在）
-# ---------------------------
-if [ ! -f "$CONFIG_FILE" ]; then
-    echo "配置文件不存在，正在生成 $CONFIG_FILE ..."
-    read -rp "每月流量重置日（1-28/29/30/31）: " RESET_DAY
-    read -rp "Telegram Bot Token: " BOT_TOKEN
-    read -rp "Telegram Chat ID: " CHAT_ID
-    read -rp "每月流量总量（GB, 0表示不限制）: " MONTH_LIMIT_GB
-    read -rp "每日提醒小时（0-23）: " DAILY_HOUR
-    read -rp "每日提醒分钟（0-59）: " DAILY_MIN
-    read -rp "监控网卡（默认 eth0）: " IFACE
-    IFACE=${IFACE:-eth0}
-    read -rp "剩余流量告警百分比（默认10，0表示不告警）: " ALERT_PERCENT
+generate_config() {
+    if [ -f "$CONFIG_FILE" ]; then
+        info "配置文件已存在：$CONFIG_FILE"
+        return
+    fi
+    read -rp "请输入每月流量重置日 (1-28/29/30/31): " RESET_DAY
+    read -rp "请输入 Telegram Bot Token: " BOT_TOKEN
+    read -rp "请输入 Telegram Chat ID: " CHAT_ID
+    read -rp "请输入每月流量总量 (GB, 0 不限制): " MONTH_LIMIT_GB
+    read -rp "请输入每日提醒小时 (0-23): " DAILY_HOUR
+    read -rp "请输入每日提醒分钟 (0-59): " DAILY_MIN
+    DEFAULT_IFACE=$(ip -o link show | awk -F': ' '{print $2}' | grep -v -E "lo|vir|wl|docker|veth" | head -n1)
+    read -rp "请输入监控网卡 (默认 $DEFAULT_IFACE): " IFACE
+    IFACE=${IFACE:-$DEFAULT_IFACE}
+    read -rp "请输入流量告警阈值百分比 (默认10): " ALERT_PERCENT
     ALERT_PERCENT=${ALERT_PERCENT:-10}
-
+    mkdir -p "$STATE_DIR"
+    chmod 700 "$STATE_DIR"
     cat > "$CONFIG_FILE" <<EOF
 RESET_DAY=$RESET_DAY
 BOT_TOKEN="$BOT_TOKEN"
-CHAT_ID=$CHAT_ID
+CHAT_ID="$CHAT_ID"
 MONTH_LIMIT_GB=$MONTH_LIMIT_GB
 DAILY_HOUR=$DAILY_HOUR
 DAILY_MIN=$DAILY_MIN
@@ -122,107 +68,178 @@ IFACE="$IFACE"
 ALERT_PERCENT=$ALERT_PERCENT
 EOF
     chmod 600 "$CONFIG_FILE"
-    echo "配置文件已生成：$CONFIG_FILE"
-else
-    echo "检测到配置文件，读取配置..."
-fi
+    info "配置已保存：$CONFIG_FILE"
+}
 
-# 读取配置
-# shellcheck source=/dev/null
+generate_main_script() {
+    cat > "$SCRIPT_FILE" <<'EOS'
+#!/bin/bash
+set -euo pipefail
+IFS=$'\n\t'
+
+CONFIG_FILE="/etc/vps_vnstat_config.conf"
+STATE_DIR="/var/lib/vps_vnstat_telegram"
+STATE_FILE="$STATE_DIR/state.json"
+
+# 读取配置并设置默认值
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo "配置文件缺失：$CONFIG_FILE"
+    exit 1
+fi
 source "$CONFIG_FILE"
 
-# ---------------------------
-# 初始化 state
-# ---------------------------
+RESET_DAY=${RESET_DAY:-1}
+BOT_TOKEN=${BOT_TOKEN:-""}
+CHAT_ID=${CHAT_ID:-""}
+MONTH_LIMIT_GB=${MONTH_LIMIT_GB:-0}
+DAILY_HOUR=${DAILY_HOUR:-0}
+DAILY_MIN=${DAILY_MIN:-0}
+IFACE=${IFACE:-eth0}
+ALERT_PERCENT=${ALERT_PERCENT:-10}
+
+TG_API="https://api.telegram.org/bot${BOT_TOKEN}/sendMessage"
+
+HOST=$(hostname)
+IP=$(curl -fsS --max-time 5 https://api.ipify.org || echo "未知")
 mkdir -p "$STATE_DIR"
 chmod 700 "$STATE_DIR"
 
-if [ ! -f "$STATE_FILE" ]; then
-    CUR_SUM=$(get_vnstat_cumulative_bytes "$IFACE")
-    NOW_DATE=$(date +%Y-%m-%d)
-    cat > "$STATE_FILE" <<EOF
-{
-  "last_snapshot_date": "$NOW_DATE",
-  "snapshot_bytes": $CUR_SUM
+# 字节转可读
+format_bytes() {
+    local b=$1
+    awk -v b="$b" 'BEGIN{split("B KB MB GB TB", u, " ");i=0; while(b>=1024 && i<4){b/=1024;i++} printf "%.2f%s",b,u[i+1]}'
 }
-EOF
-    chmod 600 "$STATE_FILE"
+
+# 读取 snapshot
+if [ -f "$STATE_FILE" ]; then
+    SNAP_BYTES=$(jq -r '.snapshot_bytes // 0' "$STATE_FILE")
+    SNAP_DATE=$(jq -r '.last_snapshot_date // empty' "$STATE_FILE")
+else
+    SNAP_BYTES=0
+    SNAP_DATE=$(date +%Y-%m-%d)
+    CUR_SUM=$(vnstat -i "$IFACE" --json | jq '[.interfaces[0].traffic.day[]? | (.rx + .tx)] | add // 0')
+    echo "{\"last_snapshot_date\":\"$SNAP_DATE\",\"snapshot_bytes\":$CUR_SUM}" > "$STATE_FILE"
 fi
 
-SNAP_DATE=$(jq -r '.last_snapshot_date // empty' "$STATE_FILE")
-SNAP_BYTES=$(jq -r '.snapshot_bytes // 0' "$STATE_FILE")
+# 当日流量
+read DAY_RX DAY_TX DAY_TOTAL < <(
+vnstat -i "$IFACE" --json | jq -r '[.interfaces[0].traffic.day[]? | select(.date.day == (now|strftime("%d")|tonumber)) | [.rx,.tx,(.rx+.tx)]] | add // 0,0,0'
+)
 
-# ---------------------------
-# 计算流量
-# ---------------------------
-read DAY_RX DAY_TX DAY_TOTAL < <(get_vnstat_today_bytes "$IFACE")
-CUR_SUM=$(get_vnstat_cumulative_bytes "$IFACE")
+DAY_RX=${DAY_RX:-0}
+DAY_TX=${DAY_TX:-0}
+DAY_TOTAL=${DAY_TOTAL:-0}
+
+# 本周期使用
+CUR_SUM=$(vnstat -i "$IFACE" --json | jq '[.interfaces[0].traffic.day[]? | (.rx + .tx)] | add // 0')
 USED_BYTES=$((CUR_SUM - SNAP_BYTES))
-[ "$USED_BYTES" -lt 0 ] && USED_BYTES=0
-
-MONTH_LIMIT_BYTES=$(awk -v g="$MONTH_LIMIT_GB" 'BEGIN{printf("%.0f", g*1024*1024*1024)}')
+[ $USED_BYTES -lt 0 ] && USED_BYTES=0
+MONTH_LIMIT_BYTES=$(awk -v g="$MONTH_LIMIT_GB" 'BEGIN{printf "%.0f",g*1024*1024*1024}')
 [ "$MONTH_LIMIT_BYTES" -le 0 ] && REMAIN_BYTES=0 || REMAIN_BYTES=$((MONTH_LIMIT_BYTES - USED_BYTES))
-[ "$REMAIN_BYTES" -lt 0 ] && REMAIN_BYTES=0
+[ $REMAIN_BYTES -lt 0 ] && REMAIN_BYTES=0
 
-DAY_RX_H=$(format_bytes "$DAY_RX")
-DAY_TX_H=$(format_bytes "$DAY_TX")
-DAY_TOTAL_H=$(format_bytes "$DAY_TOTAL")
-USED_H=$(format_bytes "$USED_BYTES")
-REMAIN_H=$(format_bytes "$REMAIN_BYTES")
-LIMIT_H=$(format_bytes "$MONTH_LIMIT_BYTES")
-USED_PCT=$([ "$MONTH_LIMIT_BYTES" -gt 0 ] && echo $((USED_BYTES*100/MONTH_LIMIT_BYTES)) || echo 0)
+# 进度条
+PERCENT=0
+[ "$MONTH_LIMIT_BYTES" -gt 0 ] && PERCENT=$((USED_BYTES*100/MONTH_LIMIT_BYTES))
+BAR_LEN=10
+FILLED=$((PERCENT*BAR_LEN/100))
+BAR=""
+for ((i=0;i<BAR_LEN;i++)); do
+    if [ $i -lt $FILLED ]; then
+        if [ $PERCENT -lt 70 ]; then BAR+="🟩"; elif [ $PERCENT -lt 90 ]; then BAR+="🟨"; else BAR+="🟥"; fi
+    else
+        BAR+="⬜️"
+    fi
+done
 
-# ---------------------------
-# 构造消息
-# ---------------------------
-CUR_DATE=$(date +"%Y-%m-%d %H:%M:%S")
-HOST_NAME_ESC=$(escape_md "$(hostname 2>/dev/null || echo '未知主机')")
-VPS_IP_ESC=$(escape_md "$(get_public_ip)")
-IFACE_ESC=$(escape_md "${IFACE:-未知网卡}")
+# 构建消息
+MSG="📊 VPS 流量日报
+🖥️ 主机: $HOST   
+🌐 IP: $IP   
+💾 网卡: $IFACE
+⏰ 时间: $(date '+%Y-%m-%d %H:%M:%S')
 
-BAR=$(generate_progress_bar "$USED_PCT")
-STATUS=$(get_flow_status "$USED_PCT" "$ALERT_PERCENT")
+🔹 今日流量
+⬇️ 下载: $(format_bytes $DAY_RX)   ⬆️ 上传: $(format_bytes $DAY_TX)   📦 总计: $(format_bytes $DAY_TOTAL)
 
-MSG="📊 *VPS 流量日报*
-🖥️ ${HOST_NAME_ESC} | 🌐 ${VPS_IP_ESC} | 💾 ${IFACE_ESC}
-⏰ ${CUR_DATE}
+🔸 本周期流量 (自 $SNAP_DATE 起)
+📌 已用: $(format_bytes $USED_BYTES)   剩余: $(format_bytes $REMAIN_BYTES) / 总量: $(format_bytes $MONTH_LIMIT_BYTES)
+📊 进度: $BAR $PERCENT%"
 
-🔹 今日流量: ⬇️ ${DAY_RX_H} | ⬆️ ${DAY_TX_H} | 📦 ${DAY_TOTAL_H}
-🔸 本周期: 📌 已用 ${USED_H} | 剩余 ${REMAIN_H} / 总量 ${LIMIT_H}
-
-📊 进度: ${BAR} ${USED_PCT}% ⚡️ ${STATUS}
-"
-
-# 发送 Telegram 消息
-curl -s -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" \
-    --data-urlencode "chat_id=$CHAT_ID" \
-    --data-urlencode "parse_mode=Markdown" \
-    --data-urlencode "text=$MSG" >/dev/null 2>&1 || true
-
-# ---------------------------
-# 每月重置日发送周期汇总
-# ---------------------------
-TODAY_DAY=$(date +%d | sed 's/^0*//')
-if [ "$TODAY_DAY" -eq "$RESET_DAY" ]; then
-    PERIOD_START=${SNAP_DATE:-起始}
-    PERIOD_END=$(date +"%Y-%m-%d")
-    PERIOD_MSG="📊 *VPS 流量周期汇总*
-🖥️ ${HOST_NAME_ESC} | 🌐 ${VPS_IP_ESC} | 💾 ${IFACE_ESC}
-⏰ ${CUR_DATE}
-
-📌 本周期已用: ${USED_H} | 剩余: ${REMAIN_H} / 总量 ${LIMIT_H}
-📊 进度: ${BAR} ${USED_PCT}% ⚡️ ${STATUS}
-"
-    curl -s -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" \
-        --data-urlencode "chat_id=$CHAT_ID" \
-        --data-urlencode "parse_mode=Markdown" \
-        --data-urlencode "text=$PERIOD_MSG" >/dev/null 2>&1 || true
-
-    # 更新 snapshot
-    cat > "$STATE_FILE" <<EOF
-{
-  "last_snapshot_date": "$(date +%Y-%m-%d)",
-  "snapshot_bytes": $CUR_SUM
-}
-EOF
+# 流量告警
+if [ "$MONTH_LIMIT_BYTES" -gt 0 ] && [ "$ALERT_PERCENT" -gt 0 ]; then
+    REMAIN_PERCENT=$((REMAIN_BYTES*100/MONTH_LIMIT_BYTES))
+    if [ "$REMAIN_PERCENT" -le "$ALERT_PERCENT" ]; then
+        MSG="$MSG
+⚠️ 流量告警：剩余 $REMAIN_PERCENT% (≤ $ALERT_PERCENT%)"
+    fi
 fi
+
+curl -s -X POST "$TG_API" --data-urlencode "chat_id=$CHAT_ID" --data-urlencode "text=$MSG" >/dev/null 2>&1
+EOS
+    chmod 750 "$SCRIPT_FILE"
+    info "主脚本生成完成：$SCRIPT_FILE"
+}
+
+generate_systemd() {
+    cat > "$SERVICE_FILE" <<EOF
+[Unit]
+Description=VPS vnStat Telegram Daily Report
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=$SCRIPT_FILE
+EOF
+
+    cat > "$TIMER_FILE" <<EOF
+[Unit]
+Description=Daily timer for VPS vnStat Telegram Report
+
+[Timer]
+OnCalendar=*-*-* ${DAILY_HOUR:-00}:${DAILY_MIN:-00}:00
+Persistent=true
+Unit=vps_vnstat_telegram.service
+
+[Install]
+WantedBy=timers.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable --now vps_vnstat_telegram.timer
+    info "systemd timer 已启用。"
+}
+
+uninstall_all() {
+    systemctl disable --now vps_vnstat_telegram.timer 2>/dev/null || true
+    rm -f "$SERVICE_FILE" "$TIMER_FILE" "$SCRIPT_FILE" "$CONFIG_FILE"
+    rm -rf "$STATE_DIR"
+    systemctl daemon-reload
+    info "卸载完成。"
+}
+
+main() {
+    echo "选择操作："
+    echo "1) 安装"
+    echo "2) 卸载"
+    read -rp "请输入数字: " CHOICE
+    case "$CHOICE" in
+        1)
+            install_dependencies
+            generate_config
+            generate_main_script
+            # shellcheck source=/dev/null
+            source "$CONFIG_FILE"
+            generate_systemd
+            ;;
+        2)
+            uninstall_all
+            ;;
+        *)
+            echo "无效选项"
+            ;;
+    esac
+}
+
+main
