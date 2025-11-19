@@ -52,6 +52,7 @@ generate_progress_bar() {
     local empty="⬜️"
     local length=10
     local filled=$((pct*length/100))
+    [ "$filled" -gt "$length" ] && filled=$length
     local bar=""
     for ((i=0;i<filled;i++)); do bar+="$full"; done
     for ((i=filled;i<length;i++)); do bar+="$empty"; done
@@ -113,7 +114,7 @@ if [ ! -f "$CONFIG_FILE" ]; then
     cat > "$CONFIG_FILE" <<EOF
 RESET_DAY=$RESET_DAY
 BOT_TOKEN="$BOT_TOKEN"
-CHAT_ID="$CHAT_ID"
+CHAT_ID=$CHAT_ID
 MONTH_LIMIT_GB=$MONTH_LIMIT_GB
 DAILY_HOUR=$DAILY_HOUR
 DAILY_MIN=$DAILY_MIN
@@ -175,9 +176,9 @@ USED_PCT=$([ "$MONTH_LIMIT_BYTES" -gt 0 ] && echo $((USED_BYTES*100/MONTH_LIMIT_
 # 构造消息
 # ---------------------------
 CUR_DATE=$(date +"%Y-%m-%d %H:%M:%S")
-HOST_NAME_ESC=$(escape_md "$(hostname)")
+HOST_NAME_ESC=$(escape_md "$(hostname 2>/dev/null || echo '未知主机')")
 VPS_IP_ESC=$(escape_md "$(get_public_ip)")
-IFACE_ESC=$(escape_md "$IFACE")
+IFACE_ESC=$(escape_md "${IFACE:-未知网卡}")
 
 BAR=$(generate_progress_bar "$USED_PCT")
 STATUS=$(get_flow_status "$USED_PCT" "$ALERT_PERCENT")
