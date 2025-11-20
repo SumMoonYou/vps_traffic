@@ -1,6 +1,6 @@
 #!/bin/bash
 # install_vps_vnstat.sh
-# 一键安装/卸载 VPS vnStat Telegram 流量日报脚本
+# 一键安装/卸载 VPS vnStat Telegram 流量日报脚本（systemd timer，去重，默认每日23:59）
 set -euo pipefail
 IFS=$'\n\t'
 
@@ -49,13 +49,21 @@ generate_config() {
     read -rp "请输入 Telegram Bot Token: " BOT_TOKEN
     read -rp "请输入 Telegram Chat ID: " CHAT_ID
     read -rp "请输入每月流量总量 (GB, 0 不限制): " MONTH_LIMIT_GB
-    read -rp "请输入每日提醒小时 (0-23): " DAILY_HOUR
-    read -rp "请输入每日提醒分钟 (0-59): " DAILY_MIN
+
+    # 默认每日提醒 23:59
+    read -rp "请输入每日提醒小时 (0-23, 默认23): " DAILY_HOUR
+    DAILY_HOUR=${DAILY_HOUR:-23}
+
+    read -rp "请输入每日提醒分钟 (0-59, 默认59): " DAILY_MIN
+    DAILY_MIN=${DAILY_MIN:-59}
+
     DEFAULT_IFACE=$(ip -o link show | awk -F': ' '{print $2}' | grep -v -E "lo|vir|wl|docker|veth" | head -n1)
     read -rp "请输入监控网卡 (默认 $DEFAULT_IFACE): " IFACE
     IFACE=${IFACE:-$DEFAULT_IFACE}
+
     read -rp "请输入流量告警阈值百分比 (默认10): " ALERT_PERCENT
     ALERT_PERCENT=${ALERT_PERCENT:-10}
+
     mkdir -p "$STATE_DIR"
     chmod 700 "$STATE_DIR"
     cat > "$CONFIG_FILE" <<EOF
@@ -186,13 +194,16 @@ curl -s -X POST "$TG_API" \
     --data-urlencode "text=$MSG" >/dev/null 2>&1
 EOS
 
-    # 设置可执行权限
     chmod 750 "$SCRIPT_FILE"
     info "主脚本生成完成并设置可执行权限：$SCRIPT_FILE"
 }
 
-# 生成 systemd
+# 生成 systemd timer（只保留一个）
 generate_systemd() {
+    # 停用并删除旧 timer
+    systemctl disable --now vps_vnstat_telegram.timer 2>/dev/null || true
+
+    # service
     cat > "$SERVICE_FILE" <<EOF
 [Unit]
 Description=VPS vnStat Telegram Daily Report
@@ -204,12 +215,13 @@ Type=oneshot
 ExecStart=$SCRIPT_FILE
 EOF
 
+    # timer
     cat > "$TIMER_FILE" <<EOF
 [Unit]
 Description=Daily timer for VPS vnStat Telegram Report
 
 [Timer]
-OnCalendar=*-*-* ${DAILY_HOUR:-00}:${DAILY_MIN:-00}:00
+OnCalendar=*-*-* ${DAILY_HOUR:-23}:${DAILY_MIN:-59}:00
 Persistent=true
 Unit=vps_vnstat_telegram.service
 
@@ -219,7 +231,7 @@ EOF
 
     systemctl daemon-reload
     systemctl enable --now vps_vnstat_telegram.timer
-    info "systemd timer 已启用。"
+    info "systemd timer 已启用，确保每天只存在一个 vps_vnstat_telegram.timer"
 }
 
 # 卸载
