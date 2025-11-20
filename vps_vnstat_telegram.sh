@@ -1,6 +1,6 @@
 #!/bin/bash
 # install_vps_vnstat.sh
-# 一键安装/卸载 VPS vnStat Telegram 流量日报脚本（修复 today 流量显示问题）
+# 一键安装/卸载 VPS vnStat Telegram 流量日报脚本（安全修复版）
 # 支持 systemd timer
 set -euo pipefail
 IFS=$'\n\t'
@@ -122,23 +122,18 @@ else
 fi
 
 # ===========================
-# 修复 today 流量统计
+# 安全读取 today 流量，防止 null
 # ===========================
-read DAY_RX DAY_TX DAY_TOTAL < <(
-vnstat -i "$IFACE" --json | jq -r '
-  .interfaces[0].traffic.day[]
-  | select(
+DAY_JSON=$(vnstat -i "$IFACE" --json | jq -r '
+  .interfaces[0].traffic.day // []
+  | map(select(
       .date.year  == (now|strftime("%Y")|tonumber) and
       .date.month == (now|strftime("%m")|tonumber) and
       .date.day   == (now|strftime("%d")|tonumber)
-    )
-  | "\(.rx) \(.tx) \(.rx + .tx)"
-'
-)
-
-DAY_RX=${DAY_RX:-0}
-DAY_TX=${DAY_TX:-0}
-DAY_TOTAL=${DAY_TOTAL:-0}
+    ))
+  | if length > 0 then "\(.[-1].rx) \(.[-1].tx) \(.[-1].rx + .[-1].tx)" else "0 0 0" end
+')
+read DAY_RX DAY_TX DAY_TOTAL <<< "$DAY_JSON"
 
 # 本周期使用
 CUR_SUM=$(vnstat -i "$IFACE" --json | jq '[.interfaces[0].traffic.day[]? | (.rx + .tx)] | add // 0')
