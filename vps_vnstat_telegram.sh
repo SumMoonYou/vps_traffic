@@ -1,6 +1,6 @@
 #!/bin/bash
 # install_vps_vnstat.sh
-# 一键安装/卸载 VPS vnStat Telegram 流量日报脚本
+# 一键安装/卸载 VPS vnStat Telegram 流量日报脚本（修复 today 流量显示问题）
 # 支持 systemd timer
 set -euo pipefail
 IFS=$'\n\t'
@@ -81,7 +81,7 @@ CONFIG_FILE="/etc/vps_vnstat_config.conf"
 STATE_DIR="/var/lib/vps_vnstat_telegram"
 STATE_FILE="$STATE_DIR/state.json"
 
-# 读取配置并设置默认值
+# 读取配置
 if [ ! -f "$CONFIG_FILE" ]; then
     echo "配置文件缺失：$CONFIG_FILE"
     exit 1
@@ -121,9 +121,19 @@ else
     echo "{\"last_snapshot_date\":\"$SNAP_DATE\",\"snapshot_bytes\":$CUR_SUM}" > "$STATE_FILE"
 fi
 
-# 当日流量
+# ===========================
+# 修复 today 流量统计
+# ===========================
 read DAY_RX DAY_TX DAY_TOTAL < <(
-vnstat -i "$IFACE" --json | jq -r '[.interfaces[0].traffic.day[]? | select(.date.day == (now|strftime("%d")|tonumber)) | [.rx,.tx,(.rx+.tx)]] | add // 0,0,0'
+vnstat -i "$IFACE" --json | jq -r '
+  .interfaces[0].traffic.day[]
+  | select(
+      .date.year  == (now|strftime("%Y")|tonumber) and
+      .date.month == (now|strftime("%m")|tonumber) and
+      .date.day   == (now|strftime("%d")|tonumber)
+    )
+  | "\(.rx) \(.tx) \(.rx + .tx)"
+'
 )
 
 DAY_RX=${DAY_RX:-0}
@@ -179,6 +189,7 @@ fi
 
 curl -s -X POST "$TG_API" --data-urlencode "chat_id=$CHAT_ID" --data-urlencode "text=$MSG" >/dev/null 2>&1
 EOS
+
     chmod 750 "$SCRIPT_FILE"
     info "主脚本生成完成：$SCRIPT_FILE"
 }
@@ -231,7 +242,6 @@ main() {
             install_dependencies
             generate_config
             generate_main_script
-            # shellcheck source=/dev/null
             source "$CONFIG_FILE"
             generate_systemd
             ;;
