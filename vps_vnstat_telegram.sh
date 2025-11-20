@@ -104,13 +104,12 @@ IP=$(curl -fsS --max-time 5 https://api.ipify.org || echo "未知")
 mkdir -p "$STATE_DIR"
 chmod 700 "$STATE_DIR"
 
-# 字节转可读
 format_bytes() {
     local b=$1
     awk -v b="$b" 'BEGIN{split("B KB MB GB TB", u, " ");i=0; while(b>=1024 && i<4){b/=1024;i++} printf "%.2f%s",b,u[i+1]}'
 }
 
-# 读取 snapshot
+# snapshot
 if [ -f "$STATE_FILE" ]; then
     SNAP_BYTES=$(jq -r '.snapshot_bytes // 0' "$STATE_FILE")
     SNAP_DATE=$(jq -r '.last_snapshot_date // empty' "$STATE_FILE")
@@ -122,7 +121,7 @@ else
 fi
 
 # ===========================
-# 安全读取 today 流量，防止 null
+# 安全读取 today 流量
 # ===========================
 DAY_JSON=$(vnstat -i "$IFACE" --json | jq -r '
   .interfaces[0].traffic.day // []
@@ -132,10 +131,10 @@ DAY_JSON=$(vnstat -i "$IFACE" --json | jq -r '
       .date.day   == (now|strftime("%d")|tonumber)
     ))
   | if length > 0 then "\(.[-1].rx) \(.[-1].tx) \(.[-1].rx + .[-1].tx)" else "0 0 0" end
-')
-read DAY_RX DAY_TX DAY_TOTAL <<< "$DAY_JSON"
+') || DAY_JSON="0 0 0"
 
-# 本周期使用
+read -r DAY_RX DAY_TX DAY_TOTAL <<< "${DAY_JSON:-0 0 0}"
+
 CUR_SUM=$(vnstat -i "$IFACE" --json | jq '[.interfaces[0].traffic.day[]? | (.rx + .tx)] | add // 0')
 USED_BYTES=$((CUR_SUM - SNAP_BYTES))
 [ $USED_BYTES -lt 0 ] && USED_BYTES=0
@@ -157,9 +156,7 @@ for ((i=0;i<BAR_LEN;i++)); do
     fi
 done
 
-# 构建消息
 MSG="📊 VPS 流量日报
-
 
 🖥️ 主机: $HOST   
 🌐 IP: $IP   
@@ -173,7 +170,6 @@ MSG="📊 VPS 流量日报
 📌 已用: $(format_bytes $USED_BYTES)   剩余: $(format_bytes $REMAIN_BYTES) / 总量: $(format_bytes $MONTH_LIMIT_BYTES)
 📊 进度: $BAR $PERCENT%"
 
-# 流量告警
 if [ "$MONTH_LIMIT_BYTES" -gt 0 ] && [ "$ALERT_PERCENT" -gt 0 ]; then
     REMAIN_PERCENT=$((REMAIN_BYTES*100/MONTH_LIMIT_BYTES))
     if [ "$REMAIN_PERCENT" -le "$ALERT_PERCENT" ]; then
