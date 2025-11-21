@@ -88,6 +88,10 @@ generate_main_script() {
 set -euo pipefail
 IFS=$'\n\t'
 
+# --- 关键修复：强制使用 UTF-8 语言环境 ---
+export LANG=en_US.UTF-8
+# ----------------------------------------
+
 CONFIG_FILE="/etc/vps_vnstat_config.conf"
 STATE_DIR="/var/lib/vps_vnstat_telegram"
 STATE_FILE="$STATE_DIR/state.json"
@@ -124,6 +128,12 @@ else
     echo "{\"last_snapshot_date\":\"$SNAP_DATE\",\"snapshot_bytes\":$CUR_SUM}" > "$STATE_FILE"
 fi
 
+# 计算昨日日期（用于过滤 vnstat 数据）
+YESTERDAY_YEAR=$(date -d "yesterday" +%Y)
+YESTERDAY_MONTH=$(date -d "yesterday" +%m)
+YESTERDAY_DAY=$(date -d "yesterday" +%d)
+YESTERDAY_DATE=$(date -d "yesterday" '+%Y-%m-%d')
+
 DAY_RX=0
 DAY_TX=0
 DAY_TOTAL=0
@@ -131,11 +141,12 @@ DAY_TOTAL=0
 DAY_JSON=$(vnstat -i "$IFACE" --json || echo '{}')
 DAY_JSON=${DAY_JSON:-'{}'}
 
-DAY_VALUES=$(echo "$DAY_JSON" | jq -r '
+# 使用昨日日期过滤流量数据
+DAY_VALUES=$(echo "$DAY_JSON" | jq -r --arg yy "$YESTERDAY_YEAR" --arg mm "$YESTERDAY_MONTH" --arg dd "$YESTERDAY_DAY" '
   .interfaces[0].traffic.day // []
-  | map(select(.date.year == (now|strftime("%Y")|tonumber)
-               and .date.month == (now|strftime("%m")|tonumber)
-               and .date.day == (now|strftime("%d")|tonumber)))
+  | map(select(.date.year == ($yy|tonumber)
+               and .date.month == ($mm|tonumber)
+               and .date.day == ($dd|tonumber)))
   | if length>0 then
       (.[-1].rx) as $rx | (.[-1].tx) as $tx | "\($rx) \($tx) \($rx + $tx)"
     else "0 0 0" end
@@ -158,40 +169,41 @@ FILLED=$((PERCENT*BAR_LEN/100))
 BAR=""
 for ((i=0;i<BAR_LEN;i++)); do
     if [ "$i" -lt "$FILLED" ]; then
-        if [ "$PERCENT" -lt 70 ]; then BAR+="🟩"
-        elif [ "$PERCENT" -lt 90 ]; then BAR+="🟨"
-        else BAR+="🟥"
+        if [ "$PERCENT" -lt 70 ]; then BAR+="??"
+        elif [ "$PERCENT" -lt 90 ]; then BAR+="??"
+        else BAR+="??"
         fi
     else
-        BAR+="⬜️"
+        BAR+="??"
     fi
 done
 
-MSG="📊 VPS 流量日报
+MSG="?? VPS 流量日报
 
-🖥️ 主机: $HOST
-🌐 IP: $IP
-💾 网卡: $IFACE
-⏰ 时间: $(date '+%Y-%m-%d %H:%M:%S')
+??? 主机: $HOST
+?? IP: $IP
+?? 网卡: $IFACE
+? 时间: $(date '+%Y-%m-%d %H:%M:%S')
 
-🔹 今日流量
-⬇️ 下载: $(format_bytes $DAY_RX)   ⬆️ 上传: $(format_bytes $DAY_TX)   📦 总计: $(format_bytes $DAY_TOTAL)
+?? 昨日流量 ($YESTERDAY_DATE)
+?? 下载: $(format_bytes $DAY_RX)   ?? 上传: $(format_bytes $DAY_TX)   ?? 总计: $(format_bytes $DAY_TOTAL)
 
-🔸 本周期流量 (自 $SNAP_DATE 起)
-📌 已用: $(format_bytes $USED_BYTES)   剩余: $(format_bytes $REMAIN_BYTES) / 总量: $(format_bytes $MONTH_LIMIT_BYTES)
-📊 进度: $BAR $PERCENT%"
+?? 本周期流量 (自 $SNAP_DATE 起)
+?? 已用: $(format_bytes $USED_BYTES)   剩余: $(format_bytes $REMAIN_BYTES) / 总量: $(format_bytes $MONTH_LIMIT_BYTES)
+?? 进度: $BAR $PERCENT%"
 
 if [ "$MONTH_LIMIT_BYTES" -gt 0 ] && [ "$ALERT_PERCENT" -gt 0 ]; then
     REMAIN_PERCENT=$((REMAIN_BYTES*100/MONTH_LIMIT_BYTES))
     if [ "$REMAIN_PERCENT" -le "$ALERT_PERCENT" ]; then
         MSG="$MSG
-⚠️ 流量告警：剩余 $REMAIN_PERCENT% (≤ $ALERT_PERCENT%)"
+?? 流量告警：剩余 $REMAIN_PERCENT% (≤ $ALERT_PERCENT%)"
     fi
 fi
 
-curl -s -X POST "$TG_API" \
+# 使用 -sS 确保在失败时打印错误信息到日志
+curl -sS -X POST "$TG_API" \
     --data-urlencode "chat_id=$CHAT_ID" \
-    --data-urlencode "text=$MSG" >/dev/null 2>&1
+    --data-urlencode "text=$MSG"
 EOS
 
     chmod 750 "$SCRIPT_FILE"
