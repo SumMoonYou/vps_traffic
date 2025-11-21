@@ -88,10 +88,6 @@ generate_main_script() {
 set -euo pipefail
 IFS=$'\n\t'
 
-# --- 关键修复：强制使用 UTF-8 语言环境 ---
-export LANG=en_US.UTF-8
-# ----------------------------------------
-
 CONFIG_FILE="/etc/vps_vnstat_config.conf"
 STATE_DIR="/var/lib/vps_vnstat_telegram"
 STATE_FILE="$STATE_DIR/state.json"
@@ -141,18 +137,23 @@ DAY_TOTAL=0
 DAY_JSON=$(vnstat -i "$IFACE" --json || echo '{}')
 DAY_JSON=${DAY_JSON:-'{}'}
 
-# 使用昨日日期过滤流量数据
+# --- 关键修复：修复总计为 0 的 Bug ---
+# 1. Jq 只获取 rx 和 tx，使用 // 0 避免 null
 DAY_VALUES=$(echo "$DAY_JSON" | jq -r --arg yy "$YESTERDAY_YEAR" --arg mm "$YESTERDAY_MONTH" --arg dd "$YESTERDAY_DAY" '
   .interfaces[0].traffic.day // []
   | map(select(.date.year == ($yy|tonumber)
                and .date.month == ($mm|tonumber)
                and .date.day == ($dd|tonumber)))
   | if length>0 then
-      (.[-1].rx) as $rx | (.[-1].tx) as $tx | "\($rx) \($tx) \($rx + $tx)"
-    else "0 0 0" end
+      "\(.[-1].rx // 0) \(.[-1].tx // 0)"
+    else "0 0" end
 ')
-DAY_VALUES=${DAY_VALUES:-"0 0 0"}
-read -r DAY_RX DAY_TX DAY_TOTAL <<< "$DAY_VALUES"
+DAY_VALUES=${DAY_VALUES:-"0 0"}
+read -r DAY_RX DAY_TX <<< "$DAY_VALUES"
+
+# 2. 在 Bash 中进行数学计算
+DAY_TOTAL=$((DAY_RX + DAY_TX))
+# -----------------------------------
 
 CUR_SUM=$(echo "$DAY_JSON" | jq '[.interfaces[0].traffic.day[]? | (.rx + .tx)] | add // 0')
 USED_BYTES=$((CUR_SUM - SNAP_BYTES))
@@ -169,34 +170,34 @@ FILLED=$((PERCENT*BAR_LEN/100))
 BAR=""
 for ((i=0;i<BAR_LEN;i++)); do
     if [ "$i" -lt "$FILLED" ]; then
-        if [ "$PERCENT" -lt 70 ]; then BAR+="??"
-        elif [ "$PERCENT" -lt 90 ]; then BAR+="??"
-        else BAR+="??"
+        if [ "$PERCENT" -lt 70 ]; then BAR+="🟩"
+        elif [ "$PERCENT" -lt 90 ]; then BAR+="🟨"
+        else BAR+="🟥"
         fi
     else
-        BAR+="??"
+        BAR+="⬜️"
     fi
 done
 
-MSG="?? VPS 流量日报
+MSG="📊 VPS 流量日报
 
-??? 主机: $HOST
-?? IP: $IP
-?? 网卡: $IFACE
-? 时间: $(date '+%Y-%m-%d %H:%M:%S')
+🖥️ 主机: $HOST
+🌐 IP: $IP
+💾 网卡: $IFACE
+⏰ 时间: $(date '+%Y-%m-%d %H:%M:%S')
 
-?? 昨日流量 ($YESTERDAY_DATE)
-?? 下载: $(format_bytes $DAY_RX)   ?? 上传: $(format_bytes $DAY_TX)   ?? 总计: $(format_bytes $DAY_TOTAL)
+🔹 昨日流量 ($YESTERDAY_DATE)
+⬇️ 下载: $(format_bytes $DAY_RX)   ⬆️ 上传: $(format_bytes $DAY_TX)   📦 总计: $(format_bytes $DAY_TOTAL)
 
-?? 本周期流量 (自 $SNAP_DATE 起)
-?? 已用: $(format_bytes $USED_BYTES)   剩余: $(format_bytes $REMAIN_BYTES) / 总量: $(format_bytes $MONTH_LIMIT_BYTES)
-?? 进度: $BAR $PERCENT%"
+🔸 本周期流量 (自 $SNAP_DATE 起)
+📌 已用: $(format_bytes $USED_BYTES)   剩余: $(format_bytes $REMAIN_BYTES) / 总量: $(format_bytes $MONTH_LIMIT_BYTES)
+📊 进度: $BAR $PERCENT%"
 
 if [ "$MONTH_LIMIT_BYTES" -gt 0 ] && [ "$ALERT_PERCENT" -gt 0 ]; then
     REMAIN_PERCENT=$((REMAIN_BYTES*100/MONTH_LIMIT_BYTES))
     if [ "$REMAIN_PERCENT" -le "$ALERT_PERCENT" ]; then
         MSG="$MSG
-?? 流量告警：剩余 $REMAIN_PERCENT% (≤ $ALERT_PERCENT%)"
+⚠️ 流量告警：剩余 $REMAIN_PERCENT% (≤ $ALERT_PERCENT%)"
     fi
 fi
 
@@ -225,6 +226,9 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 ExecStart=$SCRIPT_FILE
+# --- 关键修复：强制 systemd 服务使用 UTF-8 环境 ---
+Environment="LANG=en_US.UTF-8"
+# -----------------------------------------------
 EOF
 
     # timer
