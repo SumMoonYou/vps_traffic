@@ -1,6 +1,7 @@
 #!/bin/bash
 # install_vps_vnstat.sh
-# 一键安装/卸载 VPS vnStat Telegram 流量日报脚本（systemd timer，月度重置，统计昨日，默认每日00:30）
+# 一键安装/卸载 VPS vnStat Telegram 流量日报脚本
+# (systemd timer, 月度重置, 统计昨日, 默认每日00:30, 修复总计0.00B错误)
 set -euo pipefail
 IFS=$'\n\t'
 
@@ -39,13 +40,13 @@ install_dependencies() {
     fi
 }
 
-# 生成配置
+# 生成配置 (默认每日提醒 00:30)
 generate_config() {
     if [ -f "$CONFIG_FILE" ]; then
         info "配置文件已存在：$CONFIG_FILE"
         return
     fi
-    read -rp "请输入每月流量重置日 (1-28/29/30/31): " RESET_DAY
+    read -rp "请输入每月流量重置日 (1-31): " RESET_DAY
     read -rp "请输入 Telegram Bot Token: " BOT_TOKEN
     read -rp "请输入 Telegram Chat ID: " CHAT_ID
     read -rp "请输入每月流量总量 (GB, 0 不限制): " MONTH_LIMIT_GB
@@ -80,7 +81,7 @@ EOF
     info "配置已保存：$CONFIG_FILE"
 }
 
-# 生成主脚本
+# 生成主脚本 (统计昨日流量, 修复总计 bug)
 generate_main_script() {
     cat > "$SCRIPT_FILE" <<'EOS'
 #!/bin/bash
@@ -153,10 +154,12 @@ if [ -f "$STATE_FILE" ]; then
     SNAP_BYTES=$(jq -r '.snapshot_bytes // 0' "$STATE_FILE")
     SNAP_DATE=$(jq -r '.last_snapshot_date // empty' "$STATE_FILE")
 else
+    # 状态文件不存在，创建初始快照
     SNAP_BYTES=0
     SNAP_DATE=$(date +%Y-%m-%d)
     CUR_SUM=$(vnstat -i "$IFACE" --json | jq '[.interfaces[0].traffic.day[]? | (.rx + .tx)] | add // 0')
     echo "{\"last_snapshot_date\":\"$SNAP_DATE\",\"snapshot_bytes\":$CUR_SUM}" > "$STATE_FILE"
+    SNAP_BYTES=$CUR_SUM # 确保首次运行时已用流量为0
 fi
 
 DAY_RX=0
@@ -166,7 +169,7 @@ DAY_TOTAL=0
 DAY_JSON=$(vnstat -i "$IFACE" --json || echo '{}')
 DAY_JSON=${DAY_JSON:-'{}'}
 
-# --- 修改：使用 jq 和传入的昨日变量来获取昨日流量 ---
+# --- 修正：使用 jq 获取昨日流量，由 bash 计算总和 ---
 DAY_VALUES=$(echo "$DAY_JSON" | jq -r \
   --argjson y "$YESTERDAY_Y" \
   --argjson m "$YESTERDAY_M" \
@@ -176,11 +179,14 @@ DAY_VALUES=$(echo "$DAY_JSON" | jq -r \
                and .date.month == $m
                and .date.day == $d))
   | if length>0 then
-      (.[-1].rx) as $rx | (.[-1].tx) as $tx | "\($rx) \($tx) \($rx + $tx)"
-    else "0 0 0" end
+      "\(.[-1].rx // 0) \(.[-1].tx // 0)"
+    else "0 0" end
 ')
-DAY_VALUES=${DAY_VALUES:-"0 0 0"}
-read -r DAY_RX DAY_TX DAY_TOTAL <<< "$DAY_VALUES"
+DAY_VALUES=${DAY_VALUES:-"0 0"}
+
+# 关键修复：临时设置 IFS 为空格，确保 read 命令能够正确分割 DAY_RX 和 DAY_TX
+IFS=' ' read -r DAY_RX DAY_TX <<< "$DAY_VALUES"
+DAY_TOTAL=$((DAY_RX + DAY_TX))
 
 
 # --- 周期流量计算（续）---
@@ -208,7 +214,7 @@ for ((i=0;i<BAR_LEN;i++)); do
     fi
 done
 
-# --- 修改：消息模板，改为 "昨日流量" ---
+# --- 消息模板，报告 "昨日流量" ---
 MSG="📊 VPS 流量日报
 
 🖥️ 主机: $HOST
@@ -224,7 +230,9 @@ MSG="📊 VPS 流量日报
 📊 进度: $BAR $PERCENT%"
 
 if [ "$MONTH_LIMIT_BYTES" -gt 0 ] && [ "$ALERT_PERCENT" -gt 0 ]; then
-    REMAIN_PERCENT=$((REMAIN_BYTES*100/MONTH_LIMIT_BYTES))
+    REMAIN_PERCENT=0
+    [ "$MONTH_LIMIT_BYTES" -gt 0 ] && REMAIN_PERCENT=$((REMAIN_BYTES*100/MONTH_LIMIT_BYTES))
+    
     if [ "$REMAIN_PERCENT" -le "$ALERT_PERCENT" ]; then
         MSG="$MSG
 ⚠️ 流量告警：剩余 $REMAIN_PERCENT% (≤ $ALERT_PERCENT%)"
@@ -240,7 +248,7 @@ EOS
     info "主脚本生成完成并设置可执行权限：$SCRIPT_FILE"
 }
 
-# 生成 systemd timer（只保留一个）
+# 生成 systemd timer
 generate_systemd() {
     # 停用并删除旧 timer
     systemctl disable --now vps_vnstat_telegram.timer 2>/dev/null || true
@@ -273,7 +281,7 @@ EOF
 
     systemctl daemon-reload
     systemctl enable --now vps_vnstat_telegram.timer
-    info "systemd timer 已启用，确保每天只存在一个 vps_vnstat_telegram.timer"
+    info "systemd timer 已启用，配置为 ${DAILY_HOUR:-0}:${DAILY_MIN:-30} 运行。"
 }
 
 # 卸载
@@ -287,9 +295,12 @@ uninstall_all() {
 
 # 主菜单
 main() {
+    echo "VPS vnStat Telegram 流量日报脚本"
+    echo "---------------------------------"
     echo "请选择操作："
     echo "1) 安装"
     echo "2) 卸载"
+    echo "3) 退出"
     read -rp "请输入数字: " CHOICE
     case "$CHOICE" in
         1)
@@ -297,11 +308,15 @@ main() {
             generate_config
             generate_main_script
             # shellcheck source=/dev/null
-            source "$CONFIG_FILE"
+            source "$CONFIG_FILE" # 确保 $DAILY_HOUR 等变量已加载
             generate_systemd
+            info "安装完成。"
             ;;
         2)
             uninstall_all
+            ;;
+        3)
+            info "操作已取消。"
             ;;
         *)
             echo "无效选项"
