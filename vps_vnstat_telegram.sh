@@ -309,12 +309,13 @@ DAY_TOTAL=$(echo "$DAY_RX + $DAY_TX" | bc)
 debug_log "最终计算后的流量 (Bytes): RX=$DAY_RX, TX=$DAY_TX, TOTAL=$DAY_TOTAL" 
 
 
+
 # --- 消息模板 ---
 if [ "$MODE" == "Specific Date Report" ]; then
     MSG="📊 VPS 指定日期流量查询
 
 🖥 主机: $HOST
-🌐 IP: $IP
+🌐 地址： $IP
 💾 网卡: $IFACE
 ⏰ 查询时间: $(date '+%Y-%m-%d %H:%M:%S')
 
@@ -327,7 +328,7 @@ else
     MSG="📊 VPS 流量日报
 
 🖥 主机： $HOST
-🌐 IP： $IP
+🌐 地址： $IP
 💾 网卡： $IFACE
 ⏰ 时间： $(date '+%Y-%m-%d %H:%M:%S')
 
@@ -337,10 +338,12 @@ else
 ↕️ 总计： $(format_bytes $DAY_TOTAL)
 
 📅 本周期流量 (自 $SNAP_DATE 起)
-⌛ 已用： $(format_bytes $USED_BYTES) - 剩余: $(format_bytes $REMAIN_BYTES) - 总量: $(format_bytes $MONTH_LIMIT_BYTES)
+⏳ 已用： $(format_bytes $USED_BYTES)
+⏳ 剩余： $(format_bytes $REMAIN_BYTES)
+⌛ 总量： $(format_bytes $MONTH_LIMIT_BYTES)
 
-🔃 重置日： $RESET_DAY 号
-📊 进度： $BAR $PERCENT%"
+🔃 重置： $RESET_DAY 号
+🎯 进度： $BAR $PERCENT%"
     
     # 仅在每日报告中加入告警
     if [ "$MONTH_LIMIT_BYTES" -gt 0 ] && [ "$ALERT_PERCENT" -gt 0 ]; then
