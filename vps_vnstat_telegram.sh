@@ -1,6 +1,6 @@
 #!/bin/bash
 # install_vps_vnstat.sh
-# VPS vnStat Telegram 流量日报脚本 (最鲁棒兼容版：修复所有已知问题)
+# VPS vnStat Telegram 流量日报脚本
 set -euo pipefail
 IFS=$'\n\t'
 
