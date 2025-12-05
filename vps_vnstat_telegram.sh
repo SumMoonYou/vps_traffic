@@ -96,11 +96,11 @@ EOF
     info "配置已保存：$CONFIG_FILE"
 }
 
-# 生成主脚本 (最鲁棒兼容版)
+# 生成主脚本 (兼容版)
 generate_main_script() {
     cat > "$SCRIPT_FILE" <<'EOS'
 #!/bin/bash
-# vps_vnstat_telegram.sh (最鲁棒兼容版：修复所有已知问题)
+# vps_vnstat_telegram.sh (兼容版：修复所有已知问题)
 set -euo pipefail
 IFS=$'\n\t'
 
@@ -256,7 +256,7 @@ upgrade_script() {
 
 # 主菜单
 main() {
-    echo "--- VPS vnStat Telegram 流量日报脚本 (最鲁棒兼容版) ---"
+    echo "--- VPS vnStat Telegram 流量日报脚本 (兼容版) ---"
     echo "请选择操作："
     echo "1) 安装 (自动安装依赖、配置、设置定时任务)"
     echo "2) 升级 (保留配置文件，更新脚本)"
