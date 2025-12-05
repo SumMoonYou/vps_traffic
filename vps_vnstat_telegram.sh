@@ -1,6 +1,6 @@
 #!/bin/bash
 # install_vps_vnstat.sh
-# VPS vnStat Telegram 流量日报脚本
+# VPS vnStat Telegram 流量日报脚本（含升级功能）
 set -euo pipefail
 IFS=$'\n\t'
 
@@ -10,6 +10,7 @@ STATE_DIR="/var/lib/vps_vnstat_telegram"
 STATE_FILE="$STATE_DIR/state.json"
 SERVICE_FILE="/etc/systemd/system/vps_vnstat_telegram.service"
 TIMER_FILE="/etc/systemd/system/vps_vnstat_telegram.timer"
+UPGRADE_FILE="/usr/local/bin/vps_vnstat_telegram_upgrade.sh"
 
 info() { echo -e "[\e[32mINFO\e[0m] $*"; }
 warn() { echo -e "[\e[33mWARN\e[0m] $*"; }
@@ -200,168 +201,57 @@ if [ "$MODE" != "Specific Date Report" ]; then
     if [ "$CURRENT_DAY" -eq "$RESET_DAY" ] && [ "$CURRENT_DAY" -ne "$LAST_SNAP_DAY" ]; then
         CUR_SUM_UNIT=$(echo "$VNSTAT_JSON" | jq "[.interfaces[0].traffic.${TRAFFIC_PATH}[]? | (.rx + .tx)] | add // 0")
         CUR_SUM=$(echo "$CUR_SUM_UNIT * $KIB_TO_BYTES" | bc)
-        NEW_SNAP_DATE=$(date +%Y-%m-%d)
-        echo "{\"last_snapshot_date\":\"$NEW_SNAP_DATE\",\"snapshot_bytes\":$CUR_SUM}" > "$STATE_FILE"
-    fi
-    
-    if [ -f "$STATE_FILE" ]; then
-        SNAP_BYTES=$(jq -r '.snapshot_bytes // 0' "$STATE_FILE")
-        SNAP_DATE=$(jq -r '.last_snapshot_date // empty' "$STATE_FILE")
-    else
-        SNAP_BYTES=0
-        SNAP_DATE=$(date +%Y-%m-%d)
-        CUR_SUM_UNIT=$(echo "$VNSTAT_JSON" | jq "[.interfaces[0].traffic.${TRAFFIC_PATH}[]? | (.rx + .tx)] | add // 0")
-        CUR_SUM=$(echo "$CUR_SUM_UNIT * $KIB_TO_BYTES" | bc)
-        echo "{\"last_snapshot_date\":\"$SNAP_DATE\",\"snapshot_bytes\":$CUR_SUM}" > "$STATE_FILE"
-        SNAP_BYTES=$CUR_SUM
+        echo "{\"last_snapshot_date\":\"$(date +%Y-%m-%d)\",\"snapshot_bytes\":$CUR_SUM}" > "$STATE_FILE"
     fi
 
-    CUR_SUM_UNIT=$(echo "$VNSTAT_JSON" | jq "[.interfaces[0].traffic.${TRAFFIC_PATH}[]? | (.rx + .tx)] | add // 0")
-    CUR_SUM=$(echo "$CUR_SUM_UNIT * $KIB_TO_BYTES" | bc)
+    # 获取并格式化流量数据
+    DAY_VALUES=$(echo "$VNSTAT_JSON" | jq -r \
+        --argjson y "$TARGET_Y" \
+        --argjson m "$TARGET_M" \
+        --argjson d "$TARGET_D" \
+        --arg path "$TRAFFIC_PATH" '
+          (.interfaces[0].traffic[$path] // [])
+        | map(select(.date.year == $y
+                     and .date.month == $m
+                     and .date.day == $d))
+        | if length>0 then
+            "\(.[-1].rx // 0) \(.[-1].tx // 0)"
+          else "0 0" end
+    ')
 
-    USED_BYTES=$(echo "$CUR_SUM - $SNAP_BYTES" | bc)
-    [ "$(echo "$USED_BYTES < 0" | bc)" -eq 1 ] && USED_BYTES=0
+    IFS=' ' read -r DAY_RX_UNIT DAY_TX_UNIT <<< "$DAY_VALUES"
+    DAY_RX=$(echo "$DAY_RX_UNIT * $KIB_TO_BYTES" | bc)
+    DAY_TX=$(echo "$DAY_TX_UNIT * $KIB_TO_BYTES" | bc)
+    DAY_TOTAL=$(echo "$DAY_RX + $DAY_TX" | bc)
 
-    MONTH_LIMIT_BYTES=$(awk -v g="$MONTH_LIMIT_GB" 'BEGIN{printf "%.0f",g*1024*1024*1024}')
-
-    if [ "$MONTH_LIMIT_BYTES" -le 0 ]; then
-        REMAIN_BYTES=0
-    else
-        REMAIN_BYTES=$(echo "$MONTH_LIMIT_BYTES - $USED_BYTES" | bc)
-    fi
-    [ "$(echo "$REMAIN_BYTES < 0" | bc)" -eq 1 ] && REMAIN_BYTES=0
-
-    PERCENT=0
-    if [ "$MONTH_LIMIT_BYTES" -gt 0 ]; then
-        PERCENT=$(echo "scale=0; ($USED_BYTES * 100) / $MONTH_LIMIT_BYTES" | bc)
-        [ "$PERCENT" -gt 100 ] && PERCENT=100
-    fi
-
-    BAR_LEN=10
-    FILLED=$((PERCENT*BAR_LEN/100))
-    BAR=""
-    for ((i=0;i<BAR_LEN;i++)); do
-        if [ "$i" -lt "$FILLED" ]; then
-            if [ "$PERCENT" -lt 70 ]; then BAR+="🟩"
-            elif [ "$PERCENT" -lt 90 ]; then BAR+="🟨"
-            else BAR+="🟥"
-            fi
-        else
-            BAR+="⬜️"
-        fi
-    done
-fi
-
-# 提取目标日期的流量
-VNSTAT_JSON=$(get_vnstat_json)
-
-DAY_VALUES=$(echo "$VNSTAT_JSON" | jq -r \
-  --argjson y "$TARGET_Y" \
-  --argjson m "$TARGET_M" \
-  --argjson d "$TARGET_D" \
-  --arg path "$TRAFFIC_PATH" '
-    (.interfaces[0].traffic[$path] // [])
-  | map(select(.date.year == $y
-               and .date.month == $m
-               and .date.day == $d))
-  | if length>0 then
-      "\(.[-1].rx // 0) \(.[-1].tx // 0)"
-    else "0 0" end
-')
-
-IFS=' ' read -r DAY_RX_UNIT DAY_TX_UNIT <<< "$DAY_VALUES"
-DAY_RX=$(echo "$DAY_RX_UNIT * $KIB_TO_BYTES" | bc)
-DAY_TX=$(echo "$DAY_TX_UNIT * $KIB_TO_BYTES" | bc)
-DAY_TOTAL=$(echo "$DAY_RX + $DAY_TX" | bc)
-
-# 消息模板
-if [ "$MODE" == "Specific Date Report" ]; then
-    MSG="📊 VPS 指定日期流量查询
-
-🖥 主机: $HOSTNAME
-🌐 地址： $IP
-💾 网卡: $IFACE
-⏰ 查询时间: $(date '+%Y-%m-%d %H:%M:%S')
-
-📅 目标日期流量 ($TARGET_DATE_STR)
-⬇️ 下载: $(format_bytes $DAY_RX)
-⬆️ 上传: $(format_bytes $DAY_TX)
-↕️ 总计: $(format_bytes $DAY_TOTAL)"
-else
+    # Telegram 通知消息
     MSG="📊 VPS 流量日报
 
-🖥 主机： $HOSTNAME
-🌐 地址： $IP
-💾 网卡： $IFACE
-⏰ 时间： $(date '+%Y-%m-%d %H:%M:%S')
+🖥 主机：$HOSTNAME
+🌐 地址：$IP
+💾 网卡：$IFACE
+⏰ 时间：$(date '+%Y-%m-%d %H:%M:%S')
 
-📆 昨日流量 ($TARGET_DATE_STR)
-⬇️ 下载： $(format_bytes $DAY_RX)
-⬆️ 上传： $(format_bytes $DAY_TX)
-↕️ 总计： $(format_bytes $DAY_TOTAL)
+📅 昨日流量 ($TARGET_DATE_STR)
+⬇️ 下载：$(format_bytes $DAY_RX)
+⬆️ 上传：$(format_bytes $DAY_TX)
+↕️ 总计：$(format_bytes $DAY_TOTAL)"
 
-📅 本周期流量 (自 $SNAP_DATE 起)
-⏳ 已用： $(format_bytes $USED_BYTES)
-⏳ 剩余： $(format_bytes $REMAIN_BYTES)
-⌛ 总量： $(format_bytes $MONTH_LIMIT_BYTES)
-
-🔃 重置： $RESET_DAY 号
-🎯 进度： $BAR $PERCENT%"
-fi
-
-curl -s -X POST "$TG_API" \
-    --data-urlencode "chat_id=$CHAT_ID" \
-    --data-urlencode "text=$MSG" >/dev/null 2>&1
+    curl -s -X POST "$TG_API" --data-urlencode "chat_id=$CHAT_ID" --data-urlencode "text=$MSG" >/dev/null 2>&1
 EOS
 
     chmod 750 "$SCRIPT_FILE"
     info "主脚本已更新，修复了所有已知的兼容性问题，并提高了鲁棒性。"
 }
 
-# 生成 systemd timer
-generate_systemd() {
-    source "$CONFIG_FILE" || { err "无法加载配置，无法生成 systemd 文件"; exit 1; }
-
-    systemctl disable --now vps_vnstat_telegram.timer 2>/dev/null || true
-
-    cat > "$SERVICE_FILE" <<EOF
-[Unit]
-Description=VPS vnStat Telegram Daily Report
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-ExecStart=$SCRIPT_FILE
-EOF
-
-    cat > "$TIMER_FILE" <<EOF
-[Unit]
-Description=Daily timer for VPS vnStat Telegram Report
-
-[Timer]
-OnCalendar=*-*-* ${DAILY_HOUR}:${DAILY_MIN}:00
-Persistent=true
-Unit=vps_vnstat_telegram.service
-
-[Install]
-WantedBy=timers.target
-EOF
-
-    systemctl daemon-reload
-    systemctl enable --now vps_vnstat_telegram.timer
-    info "systemd timer 已启用，配置为 ${DAILY_HOUR}:${DAILY_MIN} 运行。"
-}
-
-# 卸载
-uninstall_all() {
-    info "开始卸载 vps_vnstat_telegram..."
-    systemctl disable --now vps_vnstat_telegram.timer 2>/dev/null || true
-    rm -f "$SERVICE_FILE" "$TIMER_FILE" "$SCRIPT_FILE" "$CONFIG_FILE"
-    rm -rf "$STATE_DIR"
-    rm -f "/tmp/vps_vnstat_debug.log"
-    systemctl daemon-reload
-    info "卸载完成。"
+# 升级脚本
+upgrade_script() {
+    info "正在升级 vps_vnstat_telegram 脚本..."
+    mv "$SCRIPT_FILE" "$SCRIPT_FILE.bak"
+    install_dependencies
+    generate_config
+    generate_main_script
+    info "脚本升级完成，保留了配置文件和状态数据。"
 }
 
 # 主菜单
@@ -369,23 +259,23 @@ main() {
     echo "--- VPS vnStat Telegram 流量日报脚本 (最鲁棒兼容版) ---"
     echo "请选择操作："
     echo "1) 安装 (自动安装依赖、配置、设置定时任务)"
-    echo "2) 卸载 (删除所有文件和定时任务)"
-    echo "3) 退出"
+    echo "2) 升级 (保留配置文件，更新脚本)"
+    echo "3) 卸载 (删除所有文件和定时任务)"
+    echo "4) 退出"
     read -rp "请输入数字: " CHOICE
     case "$CHOICE" in
         1)
             install_dependencies
             generate_config
             generate_main_script
-            generate_systemd
-            info "所有安装步骤完成。定时任务已启用。"
-            info "调试日志文件位于 /tmp/vps_vnstat_debug.log"
-            info "要查询指定日期流量，请运行：/usr/local/bin/vps_vnstat_telegram.sh YYYY-MM-DD"
             ;;
         2)
-            uninstall_all
+            upgrade_script
             ;;
         3)
+            uninstall_all
+            ;;
+        4)
             info "操作已取消。"
             ;;
         *)
