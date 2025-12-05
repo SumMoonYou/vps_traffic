@@ -49,7 +49,7 @@ generate_config() {
         return
     fi
     info "开始配置脚本参数..."
-    
+
     # 主机名配置
     if ! grep -q "HOSTNAME=" "$CONFIG_FILE"; then
         read -rp "请输入主机名 (默认使用当前主机名): " USER_HOSTNAME
@@ -238,6 +238,8 @@ if [ "$MODE" != "Specific Date Report" ]; then
 ↕️ 总计：$(format_bytes $DAY_TOTAL)"
 
     curl -s -X POST "$TG_API" --data-urlencode "chat_id=$CHAT_ID" --data-urlencode "text=$MSG" >/dev/null 2>&1
+fi
+
 EOS
 
     chmod 750 "$SCRIPT_FILE"
