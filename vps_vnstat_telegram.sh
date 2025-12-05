@@ -224,6 +224,16 @@ if [ "$MODE" != "Specific Date Report" ]; then
     DAY_TX=$(echo "$DAY_TX_UNIT * $KIB_TO_BYTES" | bc)
     DAY_TOTAL=$(echo "$DAY_RX + $DAY_TX" | bc)
 
+    # 流量进度计算
+    if [ "$MONTH_LIMIT_GB" -gt 0 ]; then
+        MONTH_TOTAL=$(echo "$MONTH_LIMIT_GB * 1024 * 1024 * 1024" | bc)
+        USED_PROGRESS=$(echo "scale=2; $DAY_TOTAL / $MONTH_TOTAL * 100" | bc)
+        ALERT_PROGRESS=$(echo "scale=2; $USED_PROGRESS >= $ALERT_PERCENT" | bc)
+    else
+        USED_PROGRESS=0
+        ALERT_PROGRESS=0
+    fi
+
     # Telegram 通知消息
     MSG="📊 VPS 流量日报
 
@@ -235,7 +245,14 @@ if [ "$MODE" != "Specific Date Report" ]; then
 📅 昨日流量 ($TARGET_DATE_STR)
 ⬇️ 下载：$(format_bytes $DAY_RX)
 ⬆️ 上传：$(format_bytes $DAY_TX)
-↕️ 总计：$(format_bytes $DAY_TOTAL)"
+↕️ 总计：$(format_bytes $DAY_TOTAL)
+
+🚨 流量进度：$USED_PROGRESS%
+" 
+
+    if [ "$ALERT_PROGRESS" -eq 1 ]; then
+        MSG="${MSG}⚠️ 流量告警！已使用 ${ALERT_PERCENT}% 的流量！"
+    fi
 
     curl -s -X POST "$TG_API" --data-urlencode "chat_id=$CHAT_ID" --data-urlencode "text=$MSG" >/dev/null 2>&1
 fi
