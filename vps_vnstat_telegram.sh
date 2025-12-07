@@ -1,10 +1,10 @@
 #!/bin/bash
 # install_vps_vnstat.sh
-# VPS vnStat Telegram 流量日报脚本 v1.3.4
+# VPS vnStat Telegram 流量日报脚本 v1.3.5
 set -euo pipefail
 IFS=$'\n\t'
 
-VERSION="v1.3.4"
+VERSION="v1.3.5"
 CONFIG_FILE="/etc/vps_vnstat_config.conf"
 SCRIPT_FILE="/usr/local/bin/vps_vnstat_telegram.sh"
 STATE_DIR="/var/lib/vps_vnstat_telegram"
@@ -295,6 +295,8 @@ DAY_TX=$(echo "$DAY_TX_UNIT*$KIB_TO_BYTES"|bc)
 DAY_TOTAL=$(echo "$DAY_RX+$DAY_TX"|bc)
 
 MSG="📊 VPS 流量日报
+
+
 🖥 主机： $HOST
 🌐 地址： $IP
 💾 网卡： $IFACE
