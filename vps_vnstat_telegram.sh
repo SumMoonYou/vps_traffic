@@ -1,10 +1,10 @@
 #!/bin/bash
 # install_vps_vnstat.sh
-# VPS vnStat Telegram 流量日报脚本 v1.3.3
+# VPS vnStat Telegram 流量日报脚本 v1.3.4
 set -euo pipefail
 IFS=$'\n\t'
 
-VERSION="v1.3.3"
+VERSION="v1.3.4"
 CONFIG_FILE="/etc/vps_vnstat_config.conf"
 SCRIPT_FILE="/usr/local/bin/vps_vnstat_telegram.sh"
 STATE_DIR="/var/lib/vps_vnstat_telegram"
@@ -377,9 +377,10 @@ uninstall_all() {
 main() {
     echo "--- VPS vnStat Telegram 流量日报脚本 $VERSION ---"
     echo "请选择操作："
-    echo "1) 安装 / 升级 (保留配置)"
-    echo "2) 卸载 (删除所有文件和定时任务)"
-    echo "3) 退出"
+    echo "1) 安装 (配置并安装)"
+    echo "2) 升级 (更新脚本和服务，不修改配置)"
+    echo "3) 卸载 (删除所有文件和定时任务)"
+    echo "4) 退出"
     read -rp "请输入数字: " CHOICE
     case "$CHOICE" in
         1)
@@ -387,14 +388,18 @@ main() {
             generate_config
             generate_main_script
             generate_systemd
-            info "所有步骤完成，定时任务已启用"
-            info "调试日志位于 /tmp/vps_vnstat_debug.log"
+            info "安装完成，定时任务已启用"
             info "查询指定日期流量：/usr/local/bin/vps_vnstat_telegram.sh YYYY-MM-DD"
             ;;
         2)
-            uninstall_all
+            generate_main_script
+            generate_systemd
+            info "升级完成，定时任务已启用"
             ;;
         3)
+            uninstall_all
+            ;;
+        4)
             info "操作已取消"
             ;;
         *)
