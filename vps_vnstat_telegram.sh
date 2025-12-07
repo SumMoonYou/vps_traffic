@@ -222,14 +222,17 @@ MSG="📊 VPS 流量日报
 🌐 地址： $IP
 💾 网卡： $IFACE
 ⏰ 时间： $(date '+%Y-%m-%d %H:%M:%S')
+
 📆 昨日流量 ($TARGET_DATE_STR)
 ⬇️ 下载： $(format_bytes $DAY_RX)
 ⬆️ 上传： $(format_bytes $DAY_TX)
 ↕️ 总计： $(format_bytes $DAY_TOTAL)
+
 📅 本周期流量 (自 $SNAP_DATE 起)
 ⏳ 已用： $(format_bytes $USED_BYTES)
 ⏳ 剩余： $(format_bytes $REMAIN_BYTES)
 ⌛ 总量： $(format_bytes $MONTH_LIMIT_BYTES)
+
 🔃 重置： $RESET_DAY 号
 🎯 进度： $BAR $PERCENT%"
 
