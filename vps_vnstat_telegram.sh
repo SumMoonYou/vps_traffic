@@ -1,10 +1,10 @@
 #!/bin/bash
 # install_vps_vnstat.sh
-# VPS vnStat Telegram 流量日报脚本 v1.3.0
+# VPS vnStat Telegram 流量日报脚本 v1.3.3
 set -euo pipefail
 IFS=$'\n\t'
 
-VERSION="v1.3.2"
+VERSION="v1.3.3"
 CONFIG_FILE="/etc/vps_vnstat_config.conf"
 SCRIPT_FILE="/usr/local/bin/vps_vnstat_telegram.sh"
 STATE_DIR="/var/lib/vps_vnstat_telegram"
@@ -25,32 +25,109 @@ fi
 
 # ---------------- 安装依赖 ----------------
 install_dependencies() {
-    info "开始安装依赖: vnstat, jq, curl, bc..."
-    if [ -f /etc/debian_version ]; then
-        info "使用 IPv4 更新 apt 源..."
-        for i in {1..3}; do
-            if apt-get -o Acquire::ForceIPv4=true update -y; then break; else
-                warn "更新源失败，第 $i 次尝试..."
-                sleep 2
+    info "开始检查并安装依赖: vnstat, jq, curl, bc..."
+
+    # 检查并安装 vnstat
+    if ! command -v vnstat &>/dev/null; then
+        info "vnstat 未安装，开始安装..."
+        if [ -f /etc/debian_version ]; then
+            info "使用 IPv4 更新 apt 源..."
+            for i in {1..3}; do
+                if apt-get -o Acquire::ForceIPv4=true update -y; then break; else
+                    warn "更新源失败，第 $i 次尝试..."
+                    sleep 2
+                fi
+            done
+            DEBIAN_FRONTEND=noninteractive apt-get install -y -o Acquire::ForceIPv4=true vnstat || {
+                err "安装 vnstat 失败，请检查源地址"
+                exit 1
+            }
+        elif [ -f /etc/alpine-release ]; then
+            apk add --no-cache vnstat
+        elif command -v dnf &>/dev/null || command -v yum &>/dev/null; then
+            if command -v dnf &>/dev/null; then
+                dnf install -y vnstat
+            else
+                yum install -y epel-release
+                yum install -y vnstat
             fi
-        done
-        DEBIAN_FRONTEND=noninteractive apt-get install -y -o Acquire::ForceIPv4=true vnstat jq curl bc || {
-            err "安装依赖失败，请检查源地址"
-            exit 1
-        }
-    elif [ -f /etc/alpine-release ]; then
-        apk add --no-cache vnstat jq curl bc
-    elif command -v dnf &>/dev/null || command -v yum &>/dev/null; then
-        if command -v dnf &>/dev/null; then
-            dnf install -y vnstat jq curl bc
         else
-            yum install -y epel-release
-            yum install -y vnstat jq curl bc
+            warn "未识别系统，请确保已安装 vnstat"
         fi
     else
-        warn "未识别系统，请确保已安装 vnstat jq curl bc"
+        info "vnstat 已安装，跳过安装"
     fi
-    info "依赖安装完成。"
+
+    # 检查并安装 jq
+    if ! command -v jq &>/dev/null; then
+        info "jq 未安装，开始安装..."
+        if [ -f /etc/debian_version ]; then
+            DEBIAN_FRONTEND=noninteractive apt-get install -y jq || {
+                err "安装 jq 失败，请检查源地址"
+                exit 1
+            }
+        elif [ -f /etc/alpine-release ]; then
+            apk add --no-cache jq
+        elif command -v dnf &>/dev/null || command -v yum &>/dev/null; then
+            if command -v dnf &>/dev/null; then
+                dnf install -y jq
+            else
+                yum install -y jq
+            fi
+        else
+            warn "未识别系统，请确保已安装 jq"
+        fi
+    else
+        info "jq 已安装，跳过安装"
+    fi
+
+    # 检查并安装 curl
+    if ! command -v curl &>/dev/null; then
+        info "curl 未安装，开始安装..."
+        if [ -f /etc/debian_version ]; then
+            DEBIAN_FRONTEND=noninteractive apt-get install -y curl || {
+                err "安装 curl 失败，请检查源地址"
+                exit 1
+            }
+        elif [ -f /etc/alpine-release ]; then
+            apk add --no-cache curl
+        elif command -v dnf &>/dev/null || command -v yum &>/dev/null; then
+            if command -v dnf &>/dev/null; then
+                dnf install -y curl
+            else
+                yum install -y curl
+            fi
+        else
+            warn "未识别系统，请确保已安装 curl"
+        fi
+    else
+        info "curl 已安装，跳过安装"
+    fi
+
+    # 检查并安装 bc
+    if ! command -v bc &>/dev/null; then
+        info "bc 未安装，开始安装..."
+        if [ -f /etc/debian_version ]; then
+            DEBIAN_FRONTEND=noninteractive apt-get install -y bc || {
+                err "安装 bc 失败，请检查源地址"
+                exit 1
+            }
+        elif [ -f /etc/alpine-release ]; then
+            apk add --no-cache bc
+        elif command -v dnf &>/dev/null || command -v yum &>/dev/null; then
+            if command -v dnf &>/dev/null; then
+                dnf install -y bc
+            else
+                yum install -y bc
+            fi
+        else
+            warn "未识别系统，请确保已安装 bc"
+        fi
+    else
+        info "bc 已安装，跳过安装"
+    fi
+
+    info "依赖检查完成。"
 }
 
 # ---------------- 生成配置 ----------------
