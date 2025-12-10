@@ -49,8 +49,6 @@
 bash -c "$(curl -L https://raw.githubusercontent.com/SumMoonYou/vps_traffic/refs/heads/main/vps_vnstat_telegram.sh)" @ install
 ```
 
-（你没有给我发布 URL，我可以帮你生成 GitHub Release 专用安装链接）
-
 ------
 
 ## 📁 文件结构
