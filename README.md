@@ -1,163 +1,175 @@
-# VPS vnStat Telegram 流量统计脚本
+# 📊 VPS vnStat Telegram 流量日报脚本
 
-📊 一键安装、每日推送 VPS 流量统计到 Telegram，包括当日流量、本周期已用/剩余流量，以及每月汇总。  
-支持 **Debian/Ubuntu/CentOS/RHEL/Fedora/Alpine/OpenWRT** 系统（需 root 权限）。
+### 自动统计 VPS 流量并每日发送 Telegram 报告 | 支持月流量限制、智能快照、彩色进度条
 
----
+**版本：v1.3.5**
 
-## 功能特点
+本脚本基于 **vnStat** 生成 VPS 网卡流量报表，并通过 **Telegram Bot** 自动发送每日流量日报。
+ 支持多系统、自动安装依赖、月度流量快照、剩余流量报警、手动查询指定日期等功能。
 
-- 自动检测系统类型并安装依赖：`vnstat`、`jq`、`curl`、`bc`  
-- 配置文件保存用户设置，支持修改  
-- 每日发送 Telegram 流量日报（下载、上传、总计）  
-- 显示本周期已用流量、剩余流量、总量、进度条和状态  
-- 每月在重置日发送周期汇总  
-- 支持 systemd timer 定时任务，也可回退到 crontab  
-- 可设置流量告警阈值，当剩余流量低于阈值时 Telegram 提示
+------
 
----
+## ✨ 功能特性
 
-## 安装使用
+### ✔ 自动每日流量日报推送
 
-### 1. 下载并运行安装脚本
+- 昨日下载 / 上传 / 总流量
+- 当前周期（按月重置日）已用、剩余和总流量
+- 自动换算流量单位 (B / KB / MB / GB / TB)
+
+### ✔ 智能月度快照
+
+- 在 `/var/lib/vps_vnstat_telegram/state.json` 保存月度基线
+- 支持任意重置日（默认 1 号）
+
+### ✔ 漂亮 Telegram 报表
+
+- 带 emoji 图标
+- 彩色进度条（🟩🟨🟥）
+- 流量告警（默认剩余 ≤10% 触发）
+
+### ✔ 强大的安装脚本
+
+- 自动检测系统：Debian / Ubuntu / CentOS / Rocky / Alpine
+- 自动安装 vnstat、curl、jq、bc 等依赖
+- 自动生成 systemd 定时任务
+- 支持升级脚本、卸载脚本
+
+### ✔ 支持手动查询任意日期
+
+```
+/usr/local/bin/vps_vnstat_telegram.sh 2025-01-15
+```
+
+------
+
+## 📦 安装方式
 
 ```
 bash -c "$(curl -L https://raw.githubusercontent.com/SumMoonYou/vps_traffic/refs/heads/main/vps_vnstat_telegram.sh)" @ install
 ```
 
-> 安装过程中会提示输入配置：
->
-> - 每月流量重置日（1-28/29/30/31）
-> - Telegram Bot Token
-> - Telegram Chat ID
-> - 每月流量总量（GB，0 表示无限制）
-> - 每日推送时间（小时和分钟）
-> - 监控网卡名称（默认自动检测）
-> - 剩余流量告警阈值百分比（默认 10%）
+（你没有给我发布 URL，我可以帮你生成 GitHub Release 专用安装链接）
 
-安装完成后：
+------
 
-- 配置文件路径：`/etc/vps_vnstat_config.conf`
-- 主脚本路径：`/usr/local/bin/vps_vnstat_telegram.sh`
-- 状态文件路径：`/var/lib/vps_vnstat_telegram/state.json`
-- systemd timer 名称：`vps_vnstat_telegram.timer`
+## 📁 文件结构
 
-### 2. 查看 timer 状态
+| 文件路径                                          | 用途         |
+| ------------------------------------------------- | ------------ |
+| `/usr/local/bin/vps_vnstat_telegram.sh`           | 主脚本       |
+| `/etc/vps_vnstat_config.conf`                     | 配置文件     |
+| `/var/lib/vps_vnstat_telegram/state.json`         | 月度快照     |
+| `/etc/systemd/system/vps_vnstat_telegram.service` | systemd 服务 |
+| `/etc/systemd/system/vps_vnstat_telegram.timer`   | 定时任务     |
+
+------
+
+## ⚙ 配置说明（安装脚本自动生成）
+
+安装时会自动提示输入：
+
+| 配置项                     | 说明                         |
+| -------------------------- | ---------------------------- |
+| `RESET_DAY`                | 每月流量重置日               |
+| `BOT_TOKEN`                | Telegram Bot Token           |
+| `CHAT_ID`                  | 你的 Telegram Chat ID        |
+| `MONTH_LIMIT_GB`           | 每月总流量上限（0 = 不限制） |
+| `DAILY_HOUR` / `DAILY_MIN` | 每日报告时间                 |
+| `IFACE`                    | 监控的网卡名称（自动识别）   |
+| `ALERT_PERCENT`            | 剩余流量百分比报警           |
+| `HOSTNAME_CUSTOM`          | 手动设置主机名               |
+
+------
+
+## 📅 systemd 定时任务
+
+自动安装的定时任务：
 
 ```
-# 查看所有 systemd timer
-systemctl list-timers --all
+OnCalendar=*-*-* HH:MM:00
+```
 
-# 查看本脚本 timer 状态
+查看状态：
+
+```
 systemctl status vps_vnstat_telegram.timer
-
-# 查看定时执行日志
-journalctl -u vps_vnstat_telegram.service -e
 ```
 
-### 3. 手动发送即时流量报告
+立即运行一次：
 
 ```
-sudo /usr/local/bin/vps_vnstat_telegram.sh
+systemctl start vps_vnstat_telegram.service
 ```
 
-## 配置文件说明
+------
 
-配置文件路径：`/etc/vps_vnstat_config.conf`
-
-示例内容：
+## 🔧 升级脚本
 
 ```
-RESET_DAY=1
-BOT_TOKEN=""
-CHAT_ID="-"
-MONTH_LIMIT_GB=500
-DAILY_HOUR=9
-DAILY_MIN=0
-IFACE="eth0"
-ALERT_PERCENT=10
+bash install_vps_vnstat.sh
 ```
 
-字段说明：
+选择：
 
-| 参数           | 说明                                |
-| -------------- | ----------------------------------- |
-| RESET_DAY      | 每月流量重置日（1-31）              |
-| BOT_TOKEN      | Telegram Bot Token                  |
-| CHAT_ID        | Telegram Chat ID                    |
-| MONTH_LIMIT_GB | 每月流量总量（GB），0 表示不限制    |
-| DAILY_HOUR     | 每日发送时间（小时，0-23）          |
-| DAILY_MIN      | 每日发送时间（分钟，0-59）          |
-| IFACE          | 要监控的网卡名称                    |
-| ALERT_PERCENT  | 剩余流量告警阈值（%），0 表示不告警 |
+```
+2) 升级
+```
 
-> 可直接编辑该文件修改配置，保存后 timer 会按新配置执行。
+------
 
-## 流量报告样式示例
+## 🗑 卸载脚本
 
-### 每日流量日报
+```
+bash install_vps_vnstat.sh
+```
+
+选择：
+
+```
+3) 卸载
+```
+
+------
+
+## 📤 示例消息预览 (Telegram)
 
 ```
 📊 VPS 流量日报
-🖥️ 主机: my-vps   🌐 IP: 1.2.3.4
-💾 网卡: eth0   ⏰ 2025-11-18 09:00:00
 
-🔹 今日流量
-⬇️ 下载: 1.23GB   ⬆️ 上传: 0.45GB   📦 总计: 1.68GB
+🖥 主机： MyServer
+🌐 地址： 1.2.3.4
+💾 网卡： eth0
+⏰ 时间： 2025-01-20 00:30:00
 
-🔸 本周期流量 (2025-11-01 → 2025-11-18)
-📌 已用: 25.50GB
-📌 剩余: 724.50GB / 总量 750 GB
-📊 进度: 🟩🟩🟩⬜️⬜️⬜️⬜️⬜️⬜️⬜️ 3%   ⚡️ 流量状态: ✅
+📆 昨日流量 (2025-01-19)
+⬇️ 下载： 3.52GB
+⬆️ 上传： 1.17GB
+↕️ 总计： 4.69GB
+
+📅 本周期流量 (自 2025-01-01 起)
+⏳ 已用： 28.51GB
+⏳ 剩余： 71.49GB
+⌛ 总量： 100.00GB
+
+🔃 重置： 1 号
+🎯 进度： 🟩🟩🟩🟩⬜️⬜️⬜️⬜️⬜️⬜️ 28%
+
+⚠️ 流量告警：剩余 10% (≤ 10%)
 ```
 
-### 每月流量周期汇总（在重置日发送）
+------
 
-```
-📊 VPS 流量周期汇总
-🖥️ 主机: my-vps
-🌐 IP: 1.2.3.4
+## ⭐ 支持的系统
 
-📅 周期: 2025-11-01 → 2025-11-30
-📦 本周期使用: 750GB
-📦 本周期剩余: 0GB / 总量 750 GB
-📊 进度: 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 100%   ⚡️ 流量状态: ⚠️
-```
+- Debian 9/10/11/12+
+- Ubuntu 18.04/20.04/22.04+
+- CentOS 7/8
+- Rocky / Alma / RHEL 系
+- Alpine Linux
 
-## 常见问题
+------
 
-1. **脚本报错 `配置文件缺失`**
+## 📝 许可证
 
-   - 说明配置文件 `/etc/vps_vnstat_config.conf` 不存在或被删除，请重新运行安装脚本生成配置。
-
-2. **主机名或 IP 无法显示**
-
-   - 脚本会自动获取公网 IP，如 VPS 防火墙限制访问外网，请确保 `curl` 可以访问 `https://api.ipify.org`。
-
-3. **使用 systemd timer 不触发**
-
-   - 检查 timer 状态：
-
-     ```
-     systemctl list-timers --all
-     systemctl status vps_vnstat_telegram.timer
-     ```
-
-     
-
-   - 手动运行 service 测试：
-
-     ```
-     systemctl start vps_vnstat_telegram.service
-     ```
-
-## 卸载
-
-如果不再使用，可以删除脚本、配置和状态文件，并禁用 timer：
-
-```
-sudo systemctl disable --now vps_vnstat_telegram.timer
-sudo rm -f /usr/local/bin/vps_vnstat_telegram.sh
-sudo rm -f /etc/vps_vnstat_config.conf
-sudo rm -rf /var/lib/vps_vnstat_telegram
-```
+MIT License
