@@ -1,10 +1,10 @@
 #!/bin/bash
 # install_vps_vnstat.sh
-# VPS vnStat Telegram 流量日报 + 每小时流量上传脚本 v1.4.1
+# VPS vnStat Telegram 流量日报 + 每小时上传脚本 v1.4.2
 set -euo pipefail
 IFS=$'\n\t'
 
-VERSION="v1.4.1"
+VERSION="v1.4.2"
 CONFIG_FILE="/etc/vps_vnstat_config.conf"
 SCRIPT_FILE="/usr/local/bin/vps_vnstat_telegram.sh"
 UPLOAD_SCRIPT_FILE="/usr/local/bin/vps_vnstat_upload.sh"
@@ -93,9 +93,8 @@ generate_config() {
         HOSTNAME_CUSTOM=${input:-$(hostname)}
     fi
 
-    # 上传功能配置
     read -rp "是否启用每小时上传流量数据到服务器？(y/N): " input
-    UPLOAD_ENABLE=${input,,}   # 转小写
+    UPLOAD_ENABLE=${input,,}
     if [[ "$UPLOAD_ENABLE" == "y" ]]; then
         read -rp "请输入流量上传服务器 URL (例: https://example.com/upload): " SERVER_URL
     fi
@@ -263,7 +262,6 @@ EOS
 generate_upload_script() {
     cat > "$UPLOAD_SCRIPT_FILE" <<EOF
 #!/bin/bash
-# vps_vnstat_upload.sh
 CONFIG_FILE="$CONFIG_FILE"
 source "\$CONFIG_FILE"
 bash "$SCRIPT_FILE"
@@ -317,18 +315,20 @@ Wants=network-online.target
 Type=oneshot
 ExecStart=$UPLOAD_SCRIPT_FILE
 EOF
+
         cat > "$UPLOAD_TIMER_FILE" <<EOF
 [Unit]
 Description=Hourly timer for VPS vnStat Upload
 
 [Timer]
-OnCalendar=*:0/60:00
+OnCalendar=hourly
 Persistent=true
 Unit=vps_vnstat_upload.service
 
 [Install]
 WantedBy=timers.target
 EOF
+
         systemctl daemon-reload
         systemctl enable --now vps_vnstat_upload.timer
         info "每小时上传定时任务已启用"
