@@ -1,25 +1,22 @@
 #!/bin/bash
 # install_vps_vnstat.sh
-# VPS vnStat Telegram 流量日报 + 每小时上传脚本 v1.4.2
+# VPS vnStat Telegram 流量日报脚本 v1.3.5
 set -euo pipefail
 IFS=$'\n\t'
 
-VERSION="v1.4.2"
+VERSION="v1.3.5"
 CONFIG_FILE="/etc/vps_vnstat_config.conf"
 SCRIPT_FILE="/usr/local/bin/vps_vnstat_telegram.sh"
-UPLOAD_SCRIPT_FILE="/usr/local/bin/vps_vnstat_upload.sh"
 STATE_DIR="/var/lib/vps_vnstat_telegram"
 STATE_FILE="$STATE_DIR/state.json"
 SERVICE_FILE="/etc/systemd/system/vps_vnstat_telegram.service"
 TIMER_FILE="/etc/systemd/system/vps_vnstat_telegram.timer"
-UPLOAD_SERVICE_FILE="/etc/systemd/system/vps_vnstat_upload.service"
-UPLOAD_TIMER_FILE="/etc/systemd/system/vps_vnstat_upload.timer"
 
 info() { echo -e "[\e[32mINFO\e[0m] $*"; }
 warn() { echo -e "[\e[33mWARN\e[0m] $*"; }
 err() { echo -e "[\e[31mERR\e[0m] $*"; }
 
-echo -e "VPS vnStat Telegram 流量日报 + 上传脚本 $VERSION\n"
+echo -e "VPS vnStat Telegram 流量日报脚本 $VERSION\n"
 
 if [ "$(id -u)" -ne 0 ]; then
     err "请以 root 用户运行。"
@@ -29,28 +26,108 @@ fi
 # ---------------- 安装依赖 ----------------
 install_dependencies() {
     info "开始检查并安装依赖: vnstat, jq, curl, bc..."
-    for pkg in vnstat jq curl bc; do
-        if ! command -v $pkg &>/dev/null; then
-            info "$pkg 未安装，开始安装..."
-            if [ -f /etc/debian_version ]; then
-                DEBIAN_FRONTEND=noninteractive apt-get install -y $pkg || { err "安装 $pkg 失败"; exit 1; }
-            elif [ -f /etc/alpine-release ]; then
-                apk add --no-cache $pkg
-            elif command -v dnf &>/dev/null || command -v yum &>/dev/null; then
-                if command -v dnf &>/dev/null; then
-                    dnf install -y $pkg
-                else
-                    yum install -y epel-release
-                    yum install -y $pkg
+
+    # 检查并安装 vnstat
+    if ! command -v vnstat &>/dev/null; then
+        info "vnstat 未安装，开始安装..."
+        if [ -f /etc/debian_version ]; then
+            info "使用 IPv4 更新 apt 源..."
+            for i in {1..3}; do
+                if apt-get -o Acquire::ForceIPv4=true update -y; then break; else
+                    warn "更新源失败，第 $i 次尝试..."
+                    sleep 2
                 fi
+            done
+            DEBIAN_FRONTEND=noninteractive apt-get install -y -o Acquire::ForceIPv4=true vnstat || {
+                err "安装 vnstat 失败，请检查源地址"
+                exit 1
+            }
+        elif [ -f /etc/alpine-release ]; then
+            apk add --no-cache vnstat
+        elif command -v dnf &>/dev/null || command -v yum &>/dev/null; then
+            if command -v dnf &>/dev/null; then
+                dnf install -y vnstat
             else
-                warn "未识别系统，请确保已安装 $pkg"
+                yum install -y epel-release
+                yum install -y vnstat
             fi
         else
-            info "$pkg 已安装"
+            warn "未识别系统，请确保已安装 vnstat"
         fi
-    done
-    info "依赖安装完成"
+    else
+        info "vnstat 已安装，跳过安装"
+    fi
+
+    # 检查并安装 jq
+    if ! command -v jq &>/dev/null; then
+        info "jq 未安装，开始安装..."
+        if [ -f /etc/debian_version ]; then
+            DEBIAN_FRONTEND=noninteractive apt-get install -y jq || {
+                err "安装 jq 失败，请检查源地址"
+                exit 1
+            }
+        elif [ -f /etc/alpine-release ]; then
+            apk add --no-cache jq
+        elif command -v dnf &>/dev/null || command -v yum &>/dev/null; then
+            if command -v dnf &>/dev/null; then
+                dnf install -y jq
+            else
+                yum install -y jq
+            fi
+        else
+            warn "未识别系统，请确保已安装 jq"
+        fi
+    else
+        info "jq 已安装，跳过安装"
+    fi
+
+    # 检查并安装 curl
+    if ! command -v curl &>/dev/null; then
+        info "curl 未安装，开始安装..."
+        if [ -f /etc/debian_version ]; then
+            DEBIAN_FRONTEND=noninteractive apt-get install -y curl || {
+                err "安装 curl 失败，请检查源地址"
+                exit 1
+            }
+        elif [ -f /etc/alpine-release ]; then
+            apk add --no-cache curl
+        elif command -v dnf &>/dev/null || command -v yum &>/dev/null; then
+            if command -v dnf &>/dev/null; then
+                dnf install -y curl
+            else
+                yum install -y curl
+            fi
+        else
+            warn "未识别系统，请确保已安装 curl"
+        fi
+    else
+        info "curl 已安装，跳过安装"
+    fi
+
+    # 检查并安装 bc
+    if ! command -v bc &>/dev/null; then
+        info "bc 未安装，开始安装..."
+        if [ -f /etc/debian_version ]; then
+            DEBIAN_FRONTEND=noninteractive apt-get install -y bc || {
+                err "安装 bc 失败，请检查源地址"
+                exit 1
+            }
+        elif [ -f /etc/alpine-release ]; then
+            apk add --no-cache bc
+        elif command -v dnf &>/dev/null || command -v yum &>/dev/null; then
+            if command -v dnf &>/dev/null; then
+                dnf install -y bc
+            else
+                yum install -y bc
+            fi
+        else
+            warn "未识别系统，请确保已安装 bc"
+        fi
+    else
+        info "bc 已安装，跳过安装"
+    fi
+
+    info "依赖检查完成。"
 }
 
 # ---------------- 生成配置 ----------------
@@ -58,6 +135,7 @@ generate_config() {
     mkdir -p "$STATE_DIR"
     chmod 700 "$STATE_DIR"
 
+    # 保留原配置，升级用
     if [ -f "$CONFIG_FILE" ]; then
         info "配置文件已存在，保留原有配置"
         source "$CONFIG_FILE"
@@ -88,18 +166,11 @@ generate_config() {
     read -rp "请输入流量告警阈值百分比 (默认${ALERT_PERCENT:-10}): " input
     ALERT_PERCENT=${input:-${ALERT_PERCENT:-10}}
 
+    # 主机名手动输入（首次输入保存）
     if [ -z "${HOSTNAME_CUSTOM:-}" ]; then
         read -rp "请输入主机名 (默认 $(hostname)): " input
         HOSTNAME_CUSTOM=${input:-$(hostname)}
     fi
-
-    read -rp "是否启用每小时上传流量数据到服务器？(y/N): " input
-    UPLOAD_ENABLE=${input,,}
-    if [[ "$UPLOAD_ENABLE" == "y" ]]; then
-        read -rp "请输入流量上传服务器 URL (例: https://example.com/upload): " SERVER_URL
-    fi
-    UPLOAD_ENABLE=${UPLOAD_ENABLE:-n}
-    SERVER_URL="${SERVER_URL:-}"
 
     cat > "$CONFIG_FILE" <<EOF
 RESET_DAY=$RESET_DAY
@@ -111,8 +182,6 @@ DAILY_MIN=$DAILY_MIN
 IFACE="$IFACE"
 ALERT_PERCENT=$ALERT_PERCENT
 HOSTNAME_CUSTOM="$HOSTNAME_CUSTOM"
-UPLOAD_ENABLE="$UPLOAD_ENABLE"
-SERVER_URL="$SERVER_URL"
 EOF
     chmod 600 "$CONFIG_FILE"
     info "配置已保存：$CONFIG_FILE"
@@ -122,19 +191,29 @@ EOF
 generate_main_script() {
     cat > "$SCRIPT_FILE" <<'EOS'
 #!/bin/bash
-# vps_vnstat_telegram.sh
+# vps_vnstat_telegram.sh (最鲁棒兼容版)
 set -euo pipefail
 IFS=$'\n\t'
 
 CONFIG_FILE="/etc/vps_vnstat_config.conf"
 STATE_DIR="/var/lib/vps_vnstat_telegram"
 STATE_FILE="$STATE_DIR/state.json"
+DEBUG_LOG="/tmp/vps_vnstat_debug.log"
 
+debug_log() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [DEBUG] $*" >> "$DEBUG_LOG"
+}
+
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo "配置文件缺失：$CONFIG_FILE"
+    exit 1
+fi
 source "$CONFIG_FILE"
 
 IFACE=${IFACE:-eth0}
 MONTH_LIMIT_GB=${MONTH_LIMIT_GB:-0}
 ALERT_PERCENT=${ALERT_PERCENT:-10}
+
 TG_API="https://api.telegram.org/bot${BOT_TOKEN}/sendMessage"
 HOST=${HOSTNAME_CUSTOM:-$(hostname)}
 IP=$(curl -4fsS --max-time 5 https://api.ipify.org || echo "未知")
@@ -155,6 +234,7 @@ VNSTAT_JSON=$(get_vnstat_json)
 VNSTAT_VERSION=$(vnstat --version | head -n1 | awk '{print $2}' | cut -d'.' -f1)
 KIB_TO_BYTES=$(( VNSTAT_VERSION >=2 ? 1 : 1024 ))
 
+# JSON路径判断
 if echo "$VNSTAT_JSON" | jq -e '.interfaces[0].traffic.day // [] | length>0' &>/dev/null; then
     TRAFFIC_PATH="day"
 elif echo "$VNSTAT_JSON" | jq -e '.interfaces[0].traffic.days // [] | length>0' &>/dev/null; then
@@ -163,11 +243,13 @@ else
     TRAFFIC_PATH="day"
 fi
 
+# 日期
 TARGET_DATE_STR="${1:-$(date -d "yesterday" '+%Y-%m-%d')}"
 TARGET_Y=$(date -d "$TARGET_DATE_STR" '+%Y')
 TARGET_M=$((10#$(date -d "$TARGET_DATE_STR" '+%m')))
 TARGET_D=$((10#$(date -d "$TARGET_DATE_STR" '+%d')))
 
+# 月度快照
 if [ ! -f "$STATE_FILE" ]; then
     CUR_SUM_UNIT=$(echo "$VNSTAT_JSON" | jq "[.interfaces[0].traffic.${TRAFFIC_PATH}[]? | (.rx+.tx)]|add//0")
     CUR_SUM=$(echo "$CUR_SUM_UNIT*$KIB_TO_BYTES" | bc)
@@ -176,7 +258,7 @@ fi
 SNAP_BYTES=$(jq -r '.snapshot_bytes//0' "$STATE_FILE")
 SNAP_DATE=$(jq -r '.last_snapshot_date//empty' "$STATE_FILE")
 CUR_SUM_UNIT=$(echo "$VNSTAT_JSON" | jq "[.interfaces[0].traffic.${TRAFFIC_PATH}[]? | (.rx+.tx)]|add//0")
-CUR_SUM=$(echo "$CUR_SUM_UNIT*$KIB_TO_BYTES"| bc)
+CUR_SUM=$(echo "$CUR_SUM_UNIT*$KIB_TO_BYTES" | bc)
 USED_BYTES=$(echo "$CUR_SUM-$SNAP_BYTES"|bc)
 [ "$(echo "$USED_BYTES<0"|bc)" -eq 1 ] && USED_BYTES=0
 MONTH_LIMIT_BYTES=$(awk -v g="$MONTH_LIMIT_GB" 'BEGIN{printf "%.0f",g*1024*1024*1024}')
@@ -188,6 +270,7 @@ if [ "$MONTH_LIMIT_BYTES" -gt 0 ]; then
     [ "$PERCENT" -gt 100 ] && PERCENT=100
 fi
 
+# 进度条
 BAR_LEN=10
 FILLED=$((PERCENT*BAR_LEN/100))
 BAR=""
@@ -200,6 +283,7 @@ for ((i=0;i<BAR_LEN;i++)); do
     else BAR+="⬜️"; fi
 done
 
+# 当日流量
 DAY_VALUES=$(echo "$VNSTAT_JSON" | jq -r \
   --argjson y "$TARGET_Y" --argjson m "$TARGET_M" --argjson d "$TARGET_D" --arg path "$TRAFFIC_PATH" '
     (.interfaces[0].traffic[$path]//[])|map(select(.date.year==$y and .date.month==$m and .date.day==$d))
@@ -239,43 +323,18 @@ if [ "$MONTH_LIMIT_BYTES" -gt 0 ] && [ "$ALERT_PERCENT" -gt 0 ] && [ "$REMAIN_PE
 fi
 
 curl -s -X POST "$TG_API" --data-urlencode "chat_id=$CHAT_ID" --data-urlencode "text=$MSG" >/dev/null 2>&1
-
-# ---------------- 上传到服务器 ----------------
-if [[ "${UPLOAD_ENABLE:-n}" == "y" && -n "$SERVER_URL" ]]; then
-    UPLOAD_IP=${IP:-$(curl -s4 https://api.ipify.org || echo "")}
-    UPLOAD_JSON=$(jq -n \
-        --arg ip "$UPLOAD_IP" \
-        --argjson used "$USED_BYTES" \
-        --argjson total "$MONTH_LIMIT_BYTES" \
-        --arg recharge_date "$SNAP_DATE" \
-        --argjson ts "$(date +%s)" \
-        '{ip: $ip, used: $used, total: $total, recharge_date: $recharge_date, ts: $ts}')
-    curl -s -X POST "$SERVER_URL" -H "Content-Type: application/json" -d "$UPLOAD_JSON" >/dev/null 2>&1
-fi
 EOS
 
     chmod 750 "$SCRIPT_FILE"
     info "主脚本已更新 v$VERSION"
 }
 
-# ---------------- 生成上传脚本 ----------------
-generate_upload_script() {
-    cat > "$UPLOAD_SCRIPT_FILE" <<EOF
-#!/bin/bash
-CONFIG_FILE="$CONFIG_FILE"
-source "\$CONFIG_FILE"
-bash "$SCRIPT_FILE"
-EOF
-    chmod 750 "$UPLOAD_SCRIPT_FILE"
-    info "上传脚本已生成"
-}
-
 # ---------------- systemd timer ----------------
 generate_systemd() {
     source "$CONFIG_FILE" || { err "无法加载配置"; exit 1; }
 
-    # 主脚本 timer
     systemctl disable --now vps_vnstat_telegram.timer 2>/dev/null || true
+
     cat > "$SERVICE_FILE" <<EOF
 [Unit]
 Description=VPS vnStat Telegram Daily Report
@@ -286,6 +345,7 @@ Wants=network-online.target
 Type=oneshot
 ExecStart=$SCRIPT_FILE
 EOF
+
     cat > "$TIMER_FILE" <<EOF
 [Unit]
 Description=Daily timer for VPS vnStat Telegram Report
@@ -298,53 +358,21 @@ Unit=vps_vnstat_telegram.service
 [Install]
 WantedBy=timers.target
 EOF
+
     systemctl daemon-reload
     systemctl enable --now vps_vnstat_telegram.timer
-    info "每日 Telegram 定时任务已启用"
-
-    # 上传 timer
-    if [[ "$UPLOAD_ENABLE" == "y" ]]; then
-        systemctl disable --now vps_vnstat_upload.timer 2>/dev/null || true
-        cat > "$UPLOAD_SERVICE_FILE" <<EOF
-[Unit]
-Description=VPS vnStat Hourly Upload
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-ExecStart=$UPLOAD_SCRIPT_FILE
-EOF
-
-        cat > "$UPLOAD_TIMER_FILE" <<EOF
-[Unit]
-Description=Hourly timer for VPS vnStat Upload
-
-[Timer]
-OnCalendar=hourly
-Persistent=true
-Unit=vps_vnstat_upload.service
-
-[Install]
-WantedBy=timers.target
-EOF
-
-        systemctl daemon-reload
-        systemctl enable --now vps_vnstat_upload.timer
-        info "每小时上传定时任务已启用"
-    fi
+    info "systemd timer 已启用，配置为 ${DAILY_HOUR}:${DAILY_MIN} 运行。"
 }
 
 # ---------------- 卸载 ----------------
 uninstall_all() {
     info "开始卸载 vps_vnstat_telegram..."
     systemctl disable --now vps_vnstat_telegram.timer 2>/dev/null || true
-    systemctl disable --now vps_vnstat_upload.timer 2>/dev/null || true
-    rm -f "$SERVICE_FILE" "$TIMER_FILE" "$SCRIPT_FILE" "$CONFIG_FILE" "$UPLOAD_SCRIPT_FILE" "$UPLOAD_SERVICE_FILE" "$UPLOAD_TIMER_FILE"
+    rm -f "$SERVICE_FILE" "$TIMER_FILE" "$SCRIPT_FILE" "$CONFIG_FILE"
     rm -rf "$STATE_DIR"
     rm -f "/tmp/vps_vnstat_debug.log"
     systemctl daemon-reload
-    info "卸载完成"
+    info "卸载完成。"
 }
 
 # ---------------- 主菜单 ----------------
@@ -355,21 +383,18 @@ main() {
     echo "2) 升级 (更新脚本和服务，不修改配置)"
     echo "3) 卸载 (删除所有文件和定时任务)"
     echo "4) 退出"
-    echo "5) 立即上传一次流量数据到服务器"
     read -rp "请输入数字: " CHOICE
     case "$CHOICE" in
         1)
             install_dependencies
             generate_config
             generate_main_script
-            generate_upload_script
             generate_systemd
             info "安装完成，定时任务已启用"
             info "查询指定日期流量：/usr/local/bin/vps_vnstat_telegram.sh YYYY-MM-DD"
             ;;
         2)
             generate_main_script
-            generate_upload_script
             generate_systemd
             info "升级完成，定时任务已启用"
             ;;
@@ -378,15 +403,6 @@ main() {
             ;;
         4)
             info "操作已取消"
-            ;;
-        5)
-            if [[ "${UPLOAD_ENABLE:-n}" == "y" && -n "$SERVER_URL" ]]; then
-                info "开始立即上传..."
-                bash "$UPLOAD_SCRIPT_FILE"
-                info "上传完成"
-            else
-                warn "未启用上传功能或服务器地址未配置"
-            fi
             ;;
         *)
             err "无效选项"
