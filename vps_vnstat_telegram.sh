@@ -1,8 +1,6 @@
-#!/bin/bash
-# install_vps_vnstat.sh v1.6.5
 set -u
 
-VERSION="v1.6.5"
+VERSION="v1.9"
 CONFIG_FILE="/etc/vps_vnstat_config.conf"
 SCRIPT_FILE="/usr/local/bin/vps_vnstat_telegram.sh"
 STATE_DIR="/var/lib/vps_vnstat_telegram"
@@ -11,9 +9,9 @@ STATE_FILE="$STATE_DIR/state.json"
 info() { echo -e "[\e[32mINFO\e[0m] $*"; }
 err() { echo -e "[\e[31mERR\e[0m] $*"; }
 
-# ---------------- 1. 依赖安装与网卡初始化 ----------------
+# ---------------- 1. 依赖与初始化 ----------------
 install_dependencies() {
-    info "正在安装依赖 (vnstat, jq, curl, bc)..."
+    info "正在安装依赖..."
     if [ -f /etc/debian_version ]; then
         apt-get update -y && apt-get install -y vnstat jq curl bc
     elif [ -f /etc/alpine-release ]; then
@@ -23,7 +21,6 @@ install_dependencies() {
     fi
     systemctl enable --now vnstat 2>/dev/null || true
     
-    # 获取配置中的网卡名，尝试添加到 vnstat 监控
     [ -f "$CONFIG_FILE" ] && source "$CONFIG_FILE"
     ACTIVE_IFACE=${IFACE:-eth0}
     vnstat --add -i "$ACTIVE_IFACE" 2>/dev/null || true
@@ -36,7 +33,7 @@ generate_config() {
     mkdir -p "$STATE_DIR"
     [ -f "$CONFIG_FILE" ] && source "$CONFIG_FILE"
 
-    echo "--- 配置引导 (回车跳过) ---"
+    echo "--- 配置引导 ---"
     read -rp "每月重置日 (1-31, 默认 ${RESET_DAY:-1}): " input; RESET_DAY=${input:-${RESET_DAY:-1}}
     read -rp "TG Bot Token: " input; BOT_TOKEN=${input:-${BOT_TOKEN:-}}
     read -rp "TG Chat ID: " input; CHAT_ID=${input:-${CHAT_ID:-}}
@@ -44,7 +41,6 @@ generate_config() {
     read -rp "推送时间-小时 (0-23, 默认 ${DAILY_HOUR:-0}): " input; DAILY_HOUR=${input:-${DAILY_HOUR:-0}}
     read -rp "推送时间-分钟 (0-59, 默认 ${DAILY_MIN:-30}): " input; DAILY_MIN=${input:-${DAILY_MIN:-30}}
     
-    # 自动识别网卡
     DF_IF=$(ip -o link show | awk -F': ' '{print $2}' | grep -v -E "lo|vir|wl|docker|veth" | head -n1)
     read -rp "网卡名称 (默认 $DF_IF): " input; IFACE=${input:-${IFACE:-$DF_IF}}
     
@@ -63,27 +59,23 @@ ALERT_PERCENT=$ALERT_PERCENT
 HOSTNAME_CUSTOM="$HOSTNAME_CUSTOM"
 EOF
     chmod 600 "$CONFIG_FILE"
-    info "配置已保存至 $CONFIG_FILE"
+    info "配置已更新。"
 }
 
-# ---------------- 3. 主逻辑脚本 ----------------
+# ---------------- 3. 主逻辑脚本 (整合补丁) ----------------
 generate_main_script() {
     cat > "$SCRIPT_FILE" <<'EOS'
 #!/bin/bash
-# 流量日报核心执行脚本
 set -u
-
-# 1. 基础检查
 if [ ! -f "/etc/vps_vnstat_config.conf" ]; then exit 1; fi
 source "/etc/vps_vnstat_config.conf"
 STATE_FILE="/var/lib/vps_vnstat_telegram/state.json"
 TG_API="https://api.telegram.org/bot${BOT_TOKEN}/sendMessage"
 
-# 2. 环境信息
 HOST=${HOSTNAME_CUSTOM:-$(hostname)}
 IP=$(curl -4fsS --max-time 5 https://api.ipify.org || echo "未知")
 
-# 3. 采集流量数据
+# 数据采集
 vnstat -u -i "$IFACE" >/dev/null 2>&1 || true
 VNSTAT_JSON=$(vnstat -i "$IFACE" --json 2>/dev/null || echo '{}')
 VNSTAT_VERSION=$(vnstat --version 2>/dev/null | head -n1 | awk '{print $2}' | cut -d'.' -f1 || echo "2")
@@ -92,7 +84,7 @@ TRAFFIC_PATH=$(echo "$VNSTAT_JSON" | jq -e '.interfaces[0].traffic.day // [] | l
 
 format_b() { awk -v b="${1:-0}" 'BEGIN{split("B KB MB GB TB",u," ");i=0;while(b>=1024&&i<4){b/=1024;i++}printf "%.2f%s",b,u[i+1]}'; }
 
-# --- 昨日统计 ---
+# --- 昨日流量 ---
 T_STR="${1:-$(date -d "yesterday" '+%Y-%m-%d')}"
 T_Y=$(date -d "$T_STR" '+%Y'); T_M=$((10#$(date -d "$T_STR" '+%m'))); T_D=$((10#$(date -d "$T_STR" '+%d')))
 DAY_DATA=$(echo "$VNSTAT_JSON" | jq -r --argjson y $T_Y --argjson m $T_M --argjson d $T_D --arg p "$TRAFFIC_PATH" \
@@ -110,12 +102,12 @@ else
     END_PERIOD=$(date -d "$CUR_Y-$CUR_M-$RESET_DAY +1 month" +%Y-%m-%d)
 fi
 
-# --- 周期流量计算 ---
+# --- 周期流量计算 (整合扫描逻辑) ---
 ACC_RX_U=$(echo "$VNSTAT_JSON" | jq "[.interfaces[0].traffic.${TRAFFIC_PATH}[]? | .rx]|add//0" 2>/dev/null)
 ACC_TX_U=$(echo "$VNSTAT_JSON" | jq "[.interfaces[0].traffic.${TRAFFIC_PATH}[]? | .tx]|add//0" 2>/dev/null)
 ACC_TOTAL=$(echo "($ACC_RX_U+$ACC_TX_U)*$KIB_TO_BYTES" | bc)
 
-# 如果快照不存在，尝试从数据库倒推本周期流量
+# 核心：自动扫描数据库对齐历史数据
 if [ ! -f "$STATE_FILE" ]; then
     S_Y=$(date -d "$START_PERIOD" '+%Y'); S_M=$((10#$(date -d "$START_PERIOD" '+%m'))); S_D=$((10#$(date -d "$START_PERIOD" '+%d')))
     PERIOD_RAW=$(echo "$VNSTAT_JSON" | jq -r --argjson y $S_Y --argjson m $S_M --argjson d $S_D --arg p "$TRAFFIC_PATH" \
@@ -136,30 +128,30 @@ fi
 
 [ "$(echo "$USED_BYTES<0"|bc)" -eq 1 ] && USED_BYTES=0
 LIMIT_BYTES=$(awk -v g="$MONTH_LIMIT_GB" 'BEGIN{printf "%.0f",g*1024*1024*1024}')
-REMAIN_BYTES=$(echo "$LIMIT_BYTES-$USED_BYTES" | bc)
-[ "$(echo "$REMAIN_BYTES<0"|bc)" -eq 1 ] && REMAIN_BYTES=0
+REMAIN_BYTES=$(echo "$LIMIT_BYTES-$USED_BYTES" | bc); [ "$(echo "$REMAIN_BYTES<0"|bc)" -eq 1 ] && REMAIN_BYTES=0
 PERCENT=0; [ "$LIMIT_BYTES" -gt 0 ] && PERCENT=$(echo "($USED_BYTES*100)/$LIMIT_BYTES" | bc)
 [ "$PERCENT" -gt 100 ] && PERCENT=100
 BAR=""; FILLED=$((PERCENT*10/100)); for ((i=0;i<10;i++)); do [ "$i" -lt "$FILLED" ] && BAR+="🟦" || BAR+="⬜"; done
 
-# --- 消息组装 ---
+# --- 发送 ---
 MSG="📊 *VPS 流量日报*
----------------------------
+
+
 🖥 *主机*: $HOST
 🌐 *地址*: $IP
 💾 *网卡*: $IFACE
 ⏰ *时间*: $(date '+%Y-%m-%d %H:%M')
 
-📅 *昨日数据* ($T_STR)
+🗓 *昨日数据* ($T_STR)
 📥 *下载*: $(format_b $D_RX)
 📤 *上传*: $(format_b $D_TX)
 ↕️ *总计*: $(format_b $D_TOTAL)
 
-⏳ *本周期统计*
-📅 *区间*: \`$START_PERIOD\` ➔ \`$END_PERIOD\`
-🔄 *已用*: $(format_b $USED_BYTES)
-📤 *剩余*: $(format_b $REMAIN_BYTES)
-💎 *总量*: $(format_b $LIMIT_BYTES)
+🈷 *本周期统计*
+🗓️ *区间*: \`$START_PERIOD\` ➔ \`$END_PERIOD\`
+⏳️ *已用*: $(format_b $USED_BYTES)
+⏳️ *剩余*: $(format_b $REMAIN_BYTES)
+⌛️ *总量*: $(format_b $LIMIT_BYTES)
 🔃 *重置*: 每月 $RESET_DAY 号
 
 🎯 *进度*: $BAR $PERCENT%"
@@ -167,14 +159,13 @@ MSG="📊 *VPS 流量日报*
 [ "$LIMIT_BYTES" -gt 0 ] && [ "$PERCENT" -ge $((100-ALERT_PERCENT)) ] && MSG="$MSG
 ⚠️ *告警*: 流量消耗已达 $PERCENT%！"
 
-# 推送
 RESULT=$(curl -s -X POST "$TG_API" -d "chat_id=$CHAT_ID" -d "parse_mode=Markdown" --data-urlencode "text=$MSG")
 if echo "$RESULT" | grep -q '"ok":true'; then echo "发送成功"; else echo "发送失败: $RESULT"; fi
 EOS
     chmod 750 "$SCRIPT_FILE"
 }
 
-# ---------------- 4. 定时器配置 ----------------
+# ---------------- 4. Systemd ----------------
 generate_systemd() {
     source "$CONFIG_FILE"
     systemctl disable --now vps_vnstat_telegram.timer 2>/dev/null || true
@@ -196,10 +187,9 @@ WantedBy=timers.target
 EOF
     systemctl daemon-reload
     systemctl enable --now vps_vnstat_telegram.timer
-    info "定时任务已就绪：每天 ${DAILY_HOUR}:${DAILY_MIN} 推送。"
 }
 
-# ---------------- 5. 主入口 ----------------
+# ---------------- 5. 入口 ----------------
 main() {
     echo "VPS vnStat Telegram 流量日报脚本 $VERSION"
     echo "1) 安装/更新配置"
