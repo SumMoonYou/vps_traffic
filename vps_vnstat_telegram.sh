@@ -1,10 +1,10 @@
 #!/bin/bash
 # install_vps_vnstat.sh
-# VPS vnStat Telegram 流量日报脚本 v1.3.5
+# VPS vnStat Telegram 流量日报脚本 v1.3.6
 set -euo pipefail
 IFS=$'\n\t'
 
-VERSION="v1.3.5"
+VERSION="v1.3.6"
 CONFIG_FILE="/etc/vps_vnstat_config.conf"
 SCRIPT_FILE="/usr/local/bin/vps_vnstat_telegram.sh"
 STATE_DIR="/var/lib/vps_vnstat_telegram"
@@ -249,11 +249,33 @@ TARGET_Y=$(date -d "$TARGET_DATE_STR" '+%Y')
 TARGET_M=$((10#$(date -d "$TARGET_DATE_STR" '+%m')))
 TARGET_D=$((10#$(date -d "$TARGET_DATE_STR" '+%d')))
 
-# 月度快照
-if [ ! -f "$STATE_FILE" ]; then
-    CUR_SUM_UNIT=$(echo "$VNSTAT_JSON" | jq "[.interfaces[0].traffic.${TRAFFIC_PATH}[]? | (.rx+.tx)]|add//0")
-    CUR_SUM=$(echo "$CUR_SUM_UNIT*$KIB_TO_BYTES" | bc)
-    echo "{\"last_snapshot_date\":\"$(date +%Y-%m-%d)\",\"snapshot_bytes\":$CUR_SUM}" > "$STATE_FILE"
+# ---------- 按 RESET_DAY 滚动周期 ----------
+TODAY_DAY=$(date +%d)
+TODAY_YM=$(date +%Y-%m)
+
+if [ "$TODAY_DAY" -ge "$RESET_DAY" ]; then
+    # 本月的 RESET_DAY
+    CYCLE_START="${TODAY_YM}-$(printf '%02d' "$RESET_DAY")"
+else
+    # 上一个月的 RESET_DAY
+    CYCLE_START="$(date -d "$TODAY_YM-01 -1 month" +%Y-%m)-$(printf '%02d' "$RESET_DAY")"
+fi
+
+CYCLE_END=$(date -d "$CYCLE_START +1 month -1 day" +%Y-%m-%d)
+
+# 当前总流量
+CUR_SUM_UNIT=$(echo "$VNSTAT_JSON" | jq "[.interfaces[0].traffic.${TRAFFIC_PATH}[]? | (.rx+.tx)]|add//0")
+CUR_SUM=$(echo "$CUR_SUM_UNIT*$KIB_TO_BYTES" | bc)
+
+# 如果 state 文件不存在或周期改变则重置快照
+if [ ! -f "$STATE_FILE" ] || [ "$(jq -r '.cycle_start' "$STATE_FILE")" != "$CYCLE_START" ]; then
+    echo "{\"cycle_start\":\"$CYCLE_START\",\"snapshot_bytes\":$CUR_SUM}" > "$STATE_FILE"
+fi
+
+SNAP_BYTES=$(jq -r '.snapshot_bytes' "$STATE_FILE")
+USED_BYTES=$(echo "$CUR_SUM-$SNAP_BYTES"|bc)
+[ "$(echo "$USED_BYTES<0"|bc)" -eq 1 ] && USED_BYTES=0
+SNAP_DATE=$CYCLE_START
 fi
 SNAP_BYTES=$(jq -r '.snapshot_bytes//0' "$STATE_FILE")
 SNAP_DATE=$(jq -r '.last_snapshot_date//empty' "$STATE_FILE")
