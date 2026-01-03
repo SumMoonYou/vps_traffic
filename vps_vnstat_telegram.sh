@@ -1,10 +1,10 @@
 #!/bin/bash
 # install_vps_vnstat.sh
-# VPS vnStat Telegram 流量日报脚本 v1.3.7
+# VPS vnStat Telegram 流量日报脚本 v1.3.6
 set -euo pipefail
 IFS=$'\n\t'
 
-VERSION="v1.3.7"
+VERSION="v1.3.6"
 CONFIG_FILE="/etc/vps_vnstat_config.conf"
 SCRIPT_FILE="/usr/local/bin/vps_vnstat_telegram.sh"
 STATE_DIR="/var/lib/vps_vnstat_telegram"
@@ -247,10 +247,8 @@ fi
 TODAY_DAY=$(date +%d)
 TODAY_YM=$(date +%Y-%m)
 if [ "$TODAY_DAY" -ge "$RESET_DAY" ]; then
-    # 本月的 RESET_DAY
     CYCLE_START="${TODAY_YM}-$(printf '%02d' "$RESET_DAY")"
 else
-    # 上一个月的 RESET_DAY
     CYCLE_START="$(date -d "$TODAY_YM-01 -1 month" +%Y-%m)-$(printf '%02d' "$RESET_DAY")"
 fi
 CYCLE_END=$(date -d "$CYCLE_START +1 month -1 day" +%Y-%m-%d)
@@ -288,7 +286,11 @@ DAY_TOTAL=$(echo "$DAY_RX+$DAY_TX"|bc)
 # ---------- 进度条 ----------
 BAR=""
 for i in {1..10}; do
-    if [ "$PERCENT" -ge $((i*10)) ]; then BAR+="🟩"; else BAR+="⬜️"; fi
+    if [ "$PERCENT" -ge $((i*10)) ]; then 
+        BAR+="🟩"
+    else 
+        BAR+="⬜️"
+    fi
 done
 
 MSG="📊 VPS 流量日报
