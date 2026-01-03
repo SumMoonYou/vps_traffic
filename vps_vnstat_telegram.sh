@@ -1,10 +1,10 @@
 #!/bin/bash
 # install_vps_vnstat.sh
-# VPS vnStat Telegram 流量日报脚本 v1.3.6
+# VPS vnStat Telegram 流量日报脚本 v1.3.8
 set -euo pipefail
 IFS=$'\n\t'
 
-VERSION="v1.3.6"
+VERSION="v1.3.8"
 CONFIG_FILE="/etc/vps_vnstat_config.conf"
 SCRIPT_FILE="/usr/local/bin/vps_vnstat_telegram.sh"
 STATE_DIR="/var/lib/vps_vnstat_telegram"
@@ -191,7 +191,7 @@ EOF
 generate_main_script() {
     cat > "$SCRIPT_FILE" <<'EOS'
 #!/bin/bash
-# vps_vnstat_telegram.sh
+# vps_vnstat_telegram.sh (最鲁棒兼容版)
 set -euo pipefail
 IFS=$'\n\t'
 
@@ -283,16 +283,33 @@ DAY_RX=$(echo "$DAY_RX*$KIB_TO_BYTES"|bc)
 DAY_TX=$(echo "$DAY_TX*$KIB_TO_BYTES"|bc)
 DAY_TOTAL=$(echo "$DAY_RX+$DAY_TX"|bc)
 
+# ---------- 计算流量百分比 ----------
+if [ "$MONTH_LIMIT_BYTES" -gt 0 ]; then
+    PERCENT=$(echo "scale=0;($USED_BYTES*100)/$MONTH_LIMIT_BYTES" | bc)
+    [ "$PERCENT" -gt 100 ] && PERCENT=100
+else
+    PERCENT=0  # 如果没有设置月度流量限制，则设为0
+fi
+
 # ---------- 进度条 ----------
+BAR_LEN=10
+FILLED=$((PERCENT*BAR_LEN/100))
 BAR=""
-for i in {1..10}; do
-    if [ "$PERCENT" -ge $((i*10)) ]; then 
-        BAR+="🟩"
-    else 
+for ((i=0; i<BAR_LEN; i++)); do
+    if [ "$i" -lt "$FILLED" ]; then
+        if [ "$PERCENT" -lt 70 ]; then
+            BAR+="🟩"
+        elif [ "$PERCENT" -lt 90 ]; then
+            BAR+="🟨"
+        else
+            BAR+="🟥"
+        fi
+    else
         BAR+="⬜️"
     fi
 done
 
+# ---------- 输出消息 ----------
 MSG="📊 VPS 流量日报
 
 🖥 主机：$HOST
