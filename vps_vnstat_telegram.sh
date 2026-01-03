@@ -1,13 +1,13 @@
 #!/bin/bash
 # install_vps_vnstat.sh
-# VPS vnStat Telegram 流量日报脚本 v1.7
+# VPS vnStat Telegram 流量日报脚本 v1.9
 # 功能：利用 vnStat 统计流量，通过 Systemd Timer 实现定时推送 Telegram 日报。
 
 set -euo pipefail # -e: 命令失败即退出; -u: 变量未定义即报错; -o pipefail: 管道命令中任何环节失败即视为整体失败
 IFS=$'\n\t'       # 设置字段分隔符，确保路径处理的安全性
 
 # ---------------- 全局常量 ----------------
-VERSION="v1.7"
+VERSION="v1.9"
 CONFIG_FILE="/etc/vps_vnstat_config.conf"           # 存储用户输入的配置
 SCRIPT_FILE="/usr/local/bin/vps_vnstat_telegram.sh" # 定时执行的核心逻辑脚本
 STATE_DIR="/var/lib/vps_vnstat_telegram"           # 存放流量快照的目录
@@ -190,18 +190,18 @@ MSG="📊 *VPS 流量日报*
 💾 *网卡*: $IFACE
 ⏰ *时间*: $(date '+%Y-%m-%d %H:%M')
 
-📅 *昨日数据* ($TARGET_DATE_STR)
+🗓︎ *昨日数据* ($TARGET_DATE_STR)
 📥 *下载*: $(format_b $D_RX)
 📤 *上传*: $(format_b $D_TX)
 ↕️ *总计*: $(format_b $D_TOTAL)
 
-⏳ *本周期统计*
-📅 *区间*: \`$START_PERIOD\` ➔ \`$END_PERIOD\`
-🔄 已用: $(format_b $USED_BYTES)
-📤 剩余: $(format_b $REMAIN_BYTES)
-💎 总量: $(format_b $LIMIT_BYTES)
-
+📅 *本周期统计*
+🗓️ *区间*: \`$START_PERIOD\` ➔ \`$END_PERIOD\`
+⏳️ *已用*: $(format_b $USED_BYTES)
+⏳️ *剩余*: $(format_b $REMAIN_BYTES)
+⌛ *总量*: $(format_b $LIMIT_BYTES)
 🔃 *重置*: 每月 $RESET_DAY 号
+
 🎯 *进度*: $BAR $PERCENT%"
 
 # 若设置了总量且接近限制，则附加告警信息
