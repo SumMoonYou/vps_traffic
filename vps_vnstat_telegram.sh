@@ -1,10 +1,10 @@
 #!/bin/bash
 # install_vps_vnstat.sh
-# VPS vnStat Telegram 流量日报脚本 v1.3.6
+# VPS vnStat Telegram 流量日报脚本 v1.3.7
 set -euo pipefail
 IFS=$'\n\t'
 
-VERSION="v1.3.6"
+VERSION="v1.3.7"
 CONFIG_FILE="/etc/vps_vnstat_config.conf"
 SCRIPT_FILE="/usr/local/bin/vps_vnstat_telegram.sh"
 STATE_DIR="/var/lib/vps_vnstat_telegram"
@@ -191,7 +191,7 @@ EOF
 generate_main_script() {
     cat > "$SCRIPT_FILE" <<'EOS'
 #!/bin/bash
-# vps_vnstat_telegram.sh (最鲁棒兼容版)
+# vps_vnstat_telegram.sh
 set -euo pipefail
 IFS=$'\n\t'
 
@@ -232,7 +232,7 @@ get_vnstat_json() {
 
 VNSTAT_JSON=$(get_vnstat_json)
 VNSTAT_VERSION=$(vnstat --version | head -n1 | awk '{print $2}' | cut -d'.' -f1)
-KIB_TO_BYTES=$(( VNSTAT_VERSION >=2 ? 1 : 1024 ))
+KIB_TO_BYTES=$(( VNSTAT_VERSION >= 2 ? 1 : 1024 ))
 
 # JSON路径判断
 if echo "$VNSTAT_JSON" | jq -e '.interfaces[0].traffic.day // [] | length>0' &>/dev/null; then
@@ -243,16 +243,9 @@ else
     TRAFFIC_PATH="day"
 fi
 
-# 日期
-TARGET_DATE_STR="${1:-$(date -d "yesterday" '+%Y-%m-%d')}"
-TARGET_Y=$(date -d "$TARGET_DATE_STR" '+%Y')
-TARGET_M=$((10#$(date -d "$TARGET_DATE_STR" '+%m')))
-TARGET_D=$((10#$(date -d "$TARGET_DATE_STR" '+%d')))
-
 # ---------- 按 RESET_DAY 滚动周期 ----------
 TODAY_DAY=$(date +%d)
 TODAY_YM=$(date +%Y-%m)
-
 if [ "$TODAY_DAY" -ge "$RESET_DAY" ]; then
     # 本月的 RESET_DAY
     CYCLE_START="${TODAY_YM}-$(printf '%02d' "$RESET_DAY")"
@@ -260,7 +253,6 @@ else
     # 上一个月的 RESET_DAY
     CYCLE_START="$(date -d "$TODAY_YM-01 -1 month" +%Y-%m)-$(printf '%02d' "$RESET_DAY")"
 fi
-
 CYCLE_END=$(date -d "$CYCLE_START +1 month -1 day" +%Y-%m-%d)
 
 # 当前总流量
@@ -276,75 +268,60 @@ SNAP_BYTES=$(jq -r '.snapshot_bytes' "$STATE_FILE")
 USED_BYTES=$(echo "$CUR_SUM-$SNAP_BYTES"|bc)
 [ "$(echo "$USED_BYTES<0"|bc)" -eq 1 ] && USED_BYTES=0
 SNAP_DATE=$CYCLE_START
-fi
-SNAP_BYTES=$(jq -r '.snapshot_bytes//0' "$STATE_FILE")
-SNAP_DATE=$(jq -r '.last_snapshot_date//empty' "$STATE_FILE")
-CUR_SUM_UNIT=$(echo "$VNSTAT_JSON" | jq "[.interfaces[0].traffic.${TRAFFIC_PATH}[]? | (.rx+.tx)]|add//0")
-CUR_SUM=$(echo "$CUR_SUM_UNIT*$KIB_TO_BYTES" | bc)
-USED_BYTES=$(echo "$CUR_SUM-$SNAP_BYTES"|bc)
-[ "$(echo "$USED_BYTES<0"|bc)" -eq 1 ] && USED_BYTES=0
-MONTH_LIMIT_BYTES=$(awk -v g="$MONTH_LIMIT_GB" 'BEGIN{printf "%.0f",g*1024*1024*1024}')
-REMAIN_BYTES=$(echo "$MONTH_LIMIT_BYTES-$USED_BYTES"|bc)
-[ "$(echo "$REMAIN_BYTES<0"|bc)" -eq 1 ] && REMAIN_BYTES=0
-PERCENT=0
-if [ "$MONTH_LIMIT_BYTES" -gt 0 ]; then
-    PERCENT=$(echo "scale=0;($USED_BYTES*100)/$MONTH_LIMIT_BYTES"|bc)
-    [ "$PERCENT" -gt 100 ] && PERCENT=100
-fi
 
-# 进度条
-BAR_LEN=10
-FILLED=$((PERCENT*BAR_LEN/100))
-BAR=""
-for ((i=0;i<BAR_LEN;i++)); do
-    if [ "$i" -lt "$FILLED" ]; then
-        if [ "$PERCENT" -lt 70 ]; then BAR+="🟩"
-        elif [ "$PERCENT" -lt 90 ]; then BAR+="🟨"
-        else BAR+="🟥"
-        fi
-    else BAR+="⬜️"; fi
-done
+# ---------- 昨日流量 ----------
+TARGET_DATE=$(date -d "yesterday" +%Y-%m-%d)
+Y=$(date -d "$TARGET_DATE" +%Y)
+M=$((10#$(date -d "$TARGET_DATE" +%m)))
+D=$((10#$(date -d "$TARGET_DATE" +%d)))
 
-# 当日流量
-DAY_VALUES=$(echo "$VNSTAT_JSON" | jq -r \
-  --argjson y "$TARGET_Y" --argjson m "$TARGET_M" --argjson d "$TARGET_D" --arg path "$TRAFFIC_PATH" '
-    (.interfaces[0].traffic[$path]//[])|map(select(.date.year==$y and .date.month==$m and .date.day==$d))
-    |if length>0 then "\(.[-1].rx//0) \(.[-1].tx//0)" else "0 0" end')
-DAY_VALUES=${DAY_VALUES:-"0 0"}
-IFS=' ' read -r DAY_RX_UNIT DAY_TX_UNIT <<< "$DAY_VALUES"
-DAY_RX=$(echo "$DAY_RX_UNIT*$KIB_TO_BYTES"|bc)
-DAY_TX=$(echo "$DAY_TX_UNIT*$KIB_TO_BYTES"|bc)
+read DAY_RX DAY_TX <<<$(echo "$VNSTAT_JSON" | jq -r \
+    --argjson y "$Y" --argjson m "$M" --argjson d "$D" --arg p "$TRAFFIC_PATH" '
+    (.interfaces[0].traffic[$p]//[])
+    |map(select(.date.year==$y and .date.month==$m and .date.day==$d))
+    |if length>0 then "\(.[-1].rx) \(.[-1].tx)" else "0 0" end')
+
+DAY_RX=$(echo "$DAY_RX*$KIB_TO_BYTES"|bc)
+DAY_TX=$(echo "$DAY_TX*$KIB_TO_BYTES"|bc)
 DAY_TOTAL=$(echo "$DAY_RX+$DAY_TX"|bc)
+
+# ---------- 进度条 ----------
+BAR=""
+for i in {1..10}; do
+    if [ "$PERCENT" -ge $((i*10)) ]; then BAR+="🟩"; else BAR+="⬜️"; fi
+done
 
 MSG="📊 VPS 流量日报
 
+🖥 主机：$HOST
+🌐 地址：$IP
+💾 网卡：$IFACE
+⏰ 时间：$(date '+%Y-%m-%d %H:%M:%S')
 
-🖥 主机： $HOST
-🌐 地址： $IP
-💾 网卡： $IFACE
-⏰ 时间： $(date '+%Y-%m-%d %H:%M:%S')
+📆 昨日流量 ($TARGET_DATE)
+⬇️ $(format_bytes $DAY_RX)
+⬆️ $(format_bytes $DAY_TX)
+↕️ $(format_bytes $DAY_TOTAL)
 
-📆 昨日流量 ($TARGET_DATE_STR)
-⬇️ 下载： $(format_bytes $DAY_RX)
-⬆️ 上传： $(format_bytes $DAY_TX)
-↕️ 总计： $(format_bytes $DAY_TOTAL)
+📅 本周期流量
+🔄 周期：$CYCLE_START ～ $CYCLE_END
+⏳ 已用：$(format_bytes $USED_BYTES)
+⏳ 剩余：$(format_bytes $REMAIN_BYTES)
+⌛ 总量：$(format_bytes $MONTH_LIMIT_BYTES)
 
-📅 本周期流量 (自 $SNAP_DATE 起)
-⏳ 已用： $(format_bytes $USED_BYTES)
-⏳ 剩余： $(format_bytes $REMAIN_BYTES)
-⌛ 总量： $(format_bytes $MONTH_LIMIT_BYTES)
+🎯 进度：$BAR $PERCENT%"
 
-🔃 重置： $RESET_DAY 号
-🎯 进度： $BAR $PERCENT%"
-
-REMAIN_PERCENT=$(echo "scale=0;($REMAIN_BYTES*100)/$MONTH_LIMIT_BYTES"|bc)
-[ "$(echo "$REMAIN_PERCENT<0"|bc)" -eq 1 ] && REMAIN_PERCENT=0
-if [ "$MONTH_LIMIT_BYTES" -gt 0 ] && [ "$ALERT_PERCENT" -gt 0 ] && [ "$REMAIN_PERCENT" -le "$ALERT_PERCENT" ]; then
-    MSG="$MSG
-⚠️ 流量告警：剩余 $REMAIN_PERCENT% (≤ $ALERT_PERCENT%)"
+if [ "$MONTH_LIMIT_BYTES" -gt 0 ]; then
+    REMAIN_PERCENT=$((100-PERCENT))
+    if [ "$REMAIN_PERCENT" -le "$ALERT_PERCENT" ]; then
+        MSG="$MSG
+⚠️ 流量告警：剩余 $REMAIN_PERCENT%"
+    fi
 fi
 
-curl -s -X POST "$TG_API" --data-urlencode "chat_id=$CHAT_ID" --data-urlencode "text=$MSG" >/dev/null 2>&1
+curl -s -X POST "$TG_API" \
+    --data-urlencode "chat_id=$CHAT_ID" \
+    --data-urlencode "text=$MSG" >/dev/null
 EOS
 
     chmod 750 "$SCRIPT_FILE"
