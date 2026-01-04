@@ -51,15 +51,17 @@ RESET_DAY=$(echo $CFG | jq -r '.reset_day')
 TG_API_KEY=$(echo $CFG | jq -r '.tg_api_key')
 CHAT_ID=$(echo $CFG | jq -r '.chat_id')
 
+# 默认值，防止空值导致错误
+TOTAL_TRAFFIC=${TOTAL_TRAFFIC:-0}
+RESET_DAY=${RESET_DAY:-1}
+today_day=$(date +%d)
+today_day=${today_day:-1}
+
 for cmd in vnstat curl jq bc; do
     command -v $cmd >/dev/null 2>&1 || { echo "$cmd 未安装"; exit 1; }
 done
 
 # ------------------- 日期和周期计算 -------------------
-today_day=$(date +%d)
-today_month=$(date +%m)
-today_year=$(date +%Y)
-
 get_valid_date() {
     local year=$1
     local month=$2
@@ -71,18 +73,18 @@ get_valid_date() {
     echo $valid_date
 }
 
-if [ $today_day -ge $RESET_DAY ]; then
-    PERIOD_START=$(get_valid_date $today_year $today_month $RESET_DAY)
+if [[ $today_day -ge $RESET_DAY ]]; then
+    PERIOD_START=$(get_valid_date $(date +%Y) $(date +%m) $RESET_DAY)
     next_month=$(date -d "$PERIOD_START +1 month" +%Y-%m)
     YEAR=$(date -d "$next_month-01" +%Y)
     MONTH=$(date -d "$next_month-01" +%m)
     PERIOD_END=$(get_valid_date $YEAR $MONTH $RESET_DAY)
 else
-    last_month=$(date -d "$today_year-$today_month-01 -1 month" +%Y-%m)
+    last_month=$(date -d "$(date +%Y-%m-01) -1 month" +%Y-%m)
     YEAR=$(date -d "$last_month-01" +%Y)
     MONTH=$(date -d "$last_month-01" +%m)
     PERIOD_START=$(get_valid_date $YEAR $MONTH $RESET_DAY)
-    PERIOD_END=$(get_valid_date $today_year $today_month $RESET_DAY)
+    PERIOD_END=$(get_valid_date $(date +%Y) $(date +%m) $RESET_DAY)
 fi
 
 PERIOD_START_SEC=$(date -d "$PERIOD_START" +%s)
@@ -98,6 +100,7 @@ YESTERDAY_TOTAL_BYTES=$(echo $YESTERDAY | awk '{print $3}')
 
 convert_bytes() {
     local bytes=$1
+    if [[ -z $bytes ]]; then bytes=0; fi
     if [ $bytes -ge 1099511627776 ]; then echo "$(echo "scale=2; $bytes / 1099511627776" | bc) TB"
     elif [ $bytes -ge 1073741824 ]; then echo "$(echo "scale=2; $bytes / 1073741824" | bc) GB"
     elif [ $bytes -ge 1048576 ]; then echo "$(echo "scale=2; $bytes / 1048576" | bc) MB"
@@ -112,21 +115,24 @@ YESTERDAY_DATE=$(date -d "yesterday" +%Y-%m-%d)
 
 # ------------------- 本周期累计流量 -------------------
 USED_BYTES=$(vnstat --json | jq -r ".interfaces[0].traffic.month[] | select(.date.year*100+.date.month >= $(date -d $PERIOD_START +%Y%m) and .date.year*100+.date.month <= $(date -d $PERIOD_END +%Y%m)) | .rx + .tx" | awk '{sum += $1} END {print sum}')
+USED_BYTES=${USED_BYTES:-0}
 TOTAL_BYTES=$(echo "$TOTAL_TRAFFIC*1073741824" | bc)
+TOTAL_BYTES=${TOTAL_BYTES:-0}
 REMAIN_BYTES=$(echo "$TOTAL_BYTES - $USED_BYTES" | bc)
 
 USED_STR=$(convert_bytes $USED_BYTES)
 REMAIN_STR=$(convert_bytes $REMAIN_BYTES)
 TOTAL_STR=$(convert_bytes $TOTAL_BYTES)
 
-overall_progress=$(echo "scale=2; ($USED_BYTES / $TOTAL_BYTES) * 100" | bc)
+overall_progress=$(echo "scale=2; ($USED_BYTES / $TOTAL_BYTES) * 100" | bc 2>/dev/null)
+overall_progress=${overall_progress:-0}
 overall_progress=$(printf "%.0f" $overall_progress)
 
 get_progress_bar() {
     local progress=$1
     local color
-    if [ $progress -lt 50 ]; then color="🟨"
-    elif [ $progress -lt 90 ]; then color="🟩"
+    if [[ $progress -lt 50 ]]; then color="🟨"
+    elif [[ $progress -lt 90 ]]; then color="🟩"
     else color="🟥"; fi
     local filled=$((progress / 10))
     local empty=$((10 - filled))
@@ -163,20 +169,25 @@ EOL
 # ------------------- 安装 -------------------
 install_script() {
     read -p "请输入机器名称（不能为空）：" MACHINE_NAME
-    [ -z "$MACHINE_NAME" ] && echo "机器名称不能为空！" && exit 1
+    [[ -z "$MACHINE_NAME" ]] && echo "机器名称不能为空！" && exit 1
 
     read -p "请输入总流量（GB，数字）：" TOTAL_TRAFFIC
-    [[ ! "$TOTAL_TRAFFIC" =~ ^[0-9]+$ ]] && echo "总流量必须为数字！" && exit 1
+    if [[ -z "$TOTAL_TRAFFIC" || ! "$TOTAL_TRAFFIC" =~ ^[0-9]+$ ]]; then
+        echo "总流量必须为数字！"
+        exit 1
+    fi
 
     read -p "请输入重置日（每月几号，1-31）：" RESET_DAY
-    [[ ! "$RESET_DAY" =~ ^[0-9]+$ ]] || [ "$RESET_DAY" -lt 1 ] || [ "$RESET_DAY" -gt 31 ] && \
-        echo "重置日必须是1-31之间数字" && exit 1
+    if [[ -z "$RESET_DAY" || ! "$RESET_DAY" =~ ^[0-9]+$ || $RESET_DAY -lt 1 || $RESET_DAY -gt 31 ]]; then
+        echo "重置日必须是1-31之间数字"
+        exit 1
+    fi
 
     read -p "请输入 Telegram Bot API Key：" TG_API_KEY
-    [ -z "$TG_API_KEY" ] && echo "Telegram API Key 不能为空" && exit 1
+    [[ -z "$TG_API_KEY" ]] && echo "Telegram API Key 不能为空" && exit 1
 
     read -p "请输入 Telegram Chat ID：" CHAT_ID
-    [ -z "$CHAT_ID" ] && echo "Telegram Chat ID 不能为空" && exit 1
+    [[ -z "$CHAT_ID" ]] && echo "Telegram Chat ID 不能为空" && exit 1
 
     mkdir -p /etc
     cat > $CONFIG_FILE <<EOL
@@ -220,7 +231,7 @@ EOL
 
 # ------------------- 更新 -------------------
 update_script() {
-    [ ! -f "$SCRIPT_FILE" ] && echo "脚本未安装，请先安装" && exit 1
+    [[ ! -f "$SCRIPT_FILE" ]] && echo "脚本未安装，请先安装" && exit 1
     generate_execution_script
     sudo systemctl restart traffic_report.timer
     echo "执行脚本已更新，配置保持不变"
