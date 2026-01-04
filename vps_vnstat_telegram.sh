@@ -128,8 +128,7 @@ MSG="📊 *VPS 流量日报*
 📤 上传: $(fmt_size $Y_TX)
 ↕️ 总计: $(fmt_size $Y_TOT)
 
-🈷 本周期统计
-🗓️ 区间: $S_DATE ➔ $E_DATE
+🈷 本周期统计 ($S_DATE ➔ $E_DATE)
 📈 已用: $(fmt_size $M_TOT_B)
 📉 剩余: $(fmt_size $REM_B)
 🈴 总量: $(awk -v g="$MONTH_LIMIT_GB" 'BEGIN{if(g>=1024) printf "%.2fTB", g/1024; else printf "%dGB", g}')
