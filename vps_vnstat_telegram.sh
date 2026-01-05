@@ -2,11 +2,10 @@
 
 # =================================================================
 # 名称: 流量统计 & TG日报管理工具
-# 版本: v1.4.0
-# 描述: 基于 vnStat 的流量监控脚本，支持对齐排版与剩余流量显示。
+# 版本: v1.4.2
 # =================================================================
 
-VERSION="v1.4.0"
+VERSION="v1.4.2"
 CONFIG_FILE="/etc/vnstat_tg.conf"          # 核心配置文件
 BIN_PATH="/usr/local/bin/vnstat_tg_report.sh" # 后台推送脚本
 
@@ -83,8 +82,9 @@ REMAIN_GB=$(echo "scale=2; $MAX_GB - $USED_GB" | bc)
 [ $(echo "$REMAIN_GB < 0" | bc -l) -eq 1 ] && REMAIN_GB=0
 PCT_VAL=$(echo "$USED_GB * 100 / $MAX_GB" | bc 2>/dev/null)%
 
+# --- 10格进度条逻辑 ---
 gen_bar() {
-    local used=$1; local max=$2; local len=8
+    local used=$1; local max=$2; local len=10
     local pct=$(echo "$used * 100 / $max" | bc 2>/dev/null)
     [ -z "$pct" ] && pct=0; (( pct > 100 )) && pct=100
     local char="🟩"; [ "$pct" -ge 50 ] && char="🟧"; [ "$pct" -ge 80 ] && char="🟥"
@@ -95,7 +95,7 @@ gen_bar() {
 BAR_STR=$(gen_bar "$USED_GB" "$MAX_GB")
 SEND_TIME=$(date "+%Y-%m-%d %H:%M")
 
-# --- 构造推送消息 ---
+# --- 构造推送消息 (排版优化版) ---
 MSG="📊 *流量日报 | $HOST_ALIAS*
 
 \`🏠 地址：\` \`$SERVER_IP\`
@@ -106,7 +106,7 @@ MSG="📊 *流量日报 | $HOST_ALIAS*
 
 \`📈 累计：\` \`$PERIOD_TOTAL / $MAX_GB GB\`
 \`🔂 剩余：\` \`$REMAIN_GB GB\`
-\`📊 进度：\` $BAR_STR \`$PCT_VAL\`
+\`🎯 进度：\` $BAR_STR \`$PCT_VAL\`
 
 🕙 \`$SEND_TIME\`"
 
@@ -119,7 +119,7 @@ EOF
 chmod +x $BIN_PATH
 }
 
-# --- 环境安装与配置 ---
+# --- 函数：环境安装与配置 ---
 install_all() {
     echo ">>> 正在自动安装环境依赖..."
     if [ -f /etc/debian_version ]; then
@@ -149,10 +149,12 @@ RESET_DAY=$RESET_DAY
 MAX_GB=$MAX_GB
 INTERFACE="$DEFAULT_IFACE"
 EOF
+    # 初始化 vnstat
     vnstat -u -i "$DEFAULT_IFACE" >/dev/null 2>&1
     generate_report_logic
+    # 写入定时任务 (凌晨 1:00)
     (crontab -l 2>/dev/null | grep -v "$BIN_PATH"; echo "0 1 * * * $BIN_PATH") | crontab -
-    echo "✅ 安装与配置已完成 ($VERSION)！"
+    echo "✅ 完整安装与配置已完成 ($VERSION)！"
 }
 
 # --- 菜单导航 ---
@@ -160,17 +162,17 @@ clear
 echo "==========================================="
 echo "   流量统计 TG 管理工具 $VERSION"
 echo "==========================================="
-echo " 1. 安装 / 重新配置"
-echo " 2. 仅更新脚本逻辑 (不改配置)"
+echo " 1. 安装"
+echo " 2. 更新"
 echo " 3. 卸载"
-echo " 4. 立即手动执行 (发送测试日报)"
+echo " 4. 立即手动执行 (测试推送)"
 echo " 5. 退出"
 echo "-------------------------------------------"
 read -p "请选择操作 [1-5]: " choice
 
 case $choice in
     1) install_all ;;
-    2) generate_report_logic && echo "✅ 逻辑已更新" ;;
+    2) generate_report_logic && echo "✅ 已更新。" ;;
     3) crontab -l 2>/dev/null | grep -v "$BIN_PATH" | crontab - && rm -f $BIN_PATH $CONFIG_FILE && echo "✅ 已彻底清理。" ;;
     4) [ -f "$BIN_PATH" ] && $BIN_PATH && echo "✅ 测试日报已发出。" || echo "❌ 尚未安装。" ;;
     5) exit ;;
