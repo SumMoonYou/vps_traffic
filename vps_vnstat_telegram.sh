@@ -2,10 +2,10 @@
 
 # =================================================================
 # 名称: 流量统计 & TG日报管理工具
-# 版本: v2.0.1
+# 版本: v2.1
 # =================================================================
 
-VERSION="v2.0.1"
+VERSION="v2.1"
 CONFIG_FILE="/etc/vnstat_tg.conf"
 BIN_PATH="/usr/local/bin/vnstat_tg_report.sh"
 
@@ -92,19 +92,25 @@ else
     DISP_RX="0.00 GB"; DISP_TX="0.00 GB"; TOTAL_YEST_GB="0.00"
 fi
 
-# 4. 周期判定
+# 4. 周期判定（重置日前一天为周期结束）
 TODAY_D=$(date +%d | sed 's/^0//')
-THIS_Y=$(date +%Y); THIS_M=$(date +%m)
+THIS_Y=$(date +%Y)
+THIS_M=$(date +%m)
 REMARK=""
 
-if [ "$TODAY_D" -le "$RESET_DAY" ]; then
+if [ "$TODAY_D" -lt "$RESET_DAY" ]; then
+    # 当前仍在旧周期
     START_DATE=$(date -d "${THIS_Y}-${THIS_M}-${RESET_DAY} -1 month" +%Y-%m-%d)
-    END_DATE=$(date -d "${THIS_Y}-${THIS_M}-${RESET_DAY}" +%Y-%m-%d)
-    [ "$TODAY_D" -eq "$RESET_DAY" ] && REMARK=" (旧周期结算)"
+    END_DATE=$(date -d "${THIS_Y}-${THIS_M}-${RESET_DAY} -1 day" +%Y-%m-%d)
 else
+    # 已进入新周期（含重置日当天）
     START_DATE=$(date -d "${THIS_Y}-${THIS_M}-${RESET_DAY}" +%Y-%m-%d)
-    END_DATE=$(date -d "${THIS_Y}-${THIS_M}-${RESET_DAY} +1 month" +%Y-%m-%d)
+    END_DATE=$(date -d "${THIS_Y}-${THIS_M}-${RESET_DAY} +1 month -1 day" +%Y-%m-%d)
 fi
+
+# 重置日当天提示
+[ "$TODAY_D" -eq "$RESET_DAY" ] && REMARK=" (新周期开始)"
+
 
 # 5. 周期累计统计
 TOTAL_PERIOD_MB=0
@@ -138,7 +144,7 @@ BAR=$(gen_bar $PCT)
 NOW=$(date "+%Y-%m-%d %H:%M")
 
 # 7. 构建消息
-MSG=$(printf "📊 *流量日报 (%s) | %s*\n\n\`🏠 地址：\` \`%s\`\n\`⬇️ 下载：\` \`%s\`\n\`⬆️ 上传：\` \`%s\`\n\`🈴 合计：\` \`%s GB\`\n\n\`📅 周期：\` \`%s ~ %s\`\n\`🔄 重置：\` \`每月 %s 号\`\n\`⏳ 累计：\` \`%s / %s GB%s\`\n\`🎯 进度：\` %s \`%d%%\`\n\n🕙 \`%s\`" \
+MSG=$(printf "📊 *流量日报 (%s) | %s*\n\n\`🛜 地址：\` \`%s\`\n\`⬇️ 下载：\` \`%s\`\n\`⬆️ 上传：\` \`%s\`\n\`🧮 合计：\` \`%s GB\`\n\n\`📅 周期：\` \`%s ~ %s\`\n\`🔄 重置：\` \`每月 %s 号\`\n\`⏳ 累计：\` \`%s / %s GB%s\`\n\`🎯 进度：\` %s \`%d%%\`\n\n🕙 \`%s\`" \
 "$Y_DATE" "$HOST_ALIAS" "$SERVER_IP" "$DISP_RX" "$DISP_TX" "$TOTAL_YEST_GB" "$START_DATE" "$END_DATE" "$RESET_DAY" "$USED_GB" "$MAX_GB" "$REMARK" "$BAR" "$PCT" "$NOW")
 
 $CL -s -X POST "https://api.telegram.org/bot$TG_TOKEN/sendMessage" -d "chat_id=$TG_CHAT_ID" -d "text=$MSG" -d "parse_mode=Markdown" > /dev/null
@@ -182,7 +188,7 @@ while true; do
     echo "==========================================="
     echo "   流量统计 TG 管理工具 $VERSION"
     echo "==========================================="
-    echo " 1. 全新安装 / 重新部署"
+    echo " 1. 全新安装"
     echo " 2. 修改配置"
     echo " 3. 仅更新脚本逻辑"
     echo " 4. 手动发送测试报表"
