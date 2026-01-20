@@ -2,10 +2,10 @@
 
 # =================================================================
 # 名称: 流量统计 & TG日报管理工具
-# 版本: v2.1
+# 版本: v2.2
 # =================================================================
 
-VERSION="v2.1"
+VERSION="v2.2"
 CONFIG_FILE="/etc/vnstat_tg.conf"
 BIN_PATH="/usr/local/bin/vnstat_tg_report.sh"
 
@@ -58,7 +58,7 @@ EOF
     cat <<'EOF' >> $BIN_PATH
 # 1. 更新数据
 $VN -i $INTERFACE --update >/dev/null 2>&1
-SERVER_IP=$($CL -s -4 --connect-timeout 5 https://api64.ipify.org || echo "Unknown")
+SERVER_IP=$(hostname -I | awk '{print $1}')
 
 # 2. 单位转换
 val_to_mb() {
@@ -147,7 +147,12 @@ NOW=$(date "+%Y-%m-%d %H:%M")
 MSG=$(printf "📊 *流量日报 (%s) | %s*\n\n\`🛜 地址：\` \`%s\`\n\`⬇️ 下载：\` \`%s\`\n\`⬆️ 上传：\` \`%s\`\n\`🧮 合计：\` \`%s GB\`\n\n\`📅 周期：\` \`%s ~ %s\`\n\`🔄 重置：\` \`每月 %s 号\`\n\`⏳ 累计：\` \`%s / %s GB%s\`\n\`🎯 进度：\` %s \`%d%%\`\n\n🕙 \`%s\`" \
 "$Y_DATE" "$HOST_ALIAS" "$SERVER_IP" "$DISP_RX" "$DISP_TX" "$TOTAL_YEST_GB" "$START_DATE" "$END_DATE" "$RESET_DAY" "$USED_GB" "$MAX_GB" "$REMARK" "$BAR" "$PCT" "$NOW")
 
-$CL -s -X POST "https://api.telegram.org/bot$TG_TOKEN/sendMessage" -d "chat_id=$TG_CHAT_ID" -d "text=$MSG" -d "parse_mode=Markdown" > /dev/null
+$CL -s -X POST "https://api.telegram.org/bot$TG_TOKEN/sendMessage" \
+-d "chat_id=$TG_CHAT_ID" \
+-d "text=$MSG" \
+-d "parse_mode=Markdown" \
+-d "disable_notification=true" > /dev/null
+
 EOF
     chmod +x $BIN_PATH
 }
