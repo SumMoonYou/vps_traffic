@@ -2,7 +2,7 @@
 
 # =================================================================
 # 名称: 流量统计 & TG日报管理工具
-# 版本: v2.4 
+# 版本: v2.5 
 # =================================================================
 
 VERSION="v2.4"
@@ -126,7 +126,7 @@ while [ "$CUR_TS" -le "$YEST_TS" ]; do
     CUR_TS=$((CUR_TS + 86400))
 done
 
-USED_GB=$(echo "scale=2; $TOTAL_PERIOD_MB / 1024" | $BC)
+USED_GB=$(printf "%.2f" "$(echo "$TOTAL_PERIOD_MB / 1024" | $BC)")
 PCT=$(echo "scale=0; $USED_GB * 100 / $MAX_GB" | $BC 2>/dev/null)
 [ -z "$PCT" ] && PCT=0
 
