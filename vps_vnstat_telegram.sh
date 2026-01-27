@@ -142,7 +142,7 @@ BAR=$(gen_bar $PCT)
 NOW=$(date "+%Y-%m-%d %H:%M")
 
 # 7. 构建消息并发往 Telegram
-MSG=$(printf "📊 *流量日报 (%s) | %s*\n\n\`🛜 地址：\` \`%s\`\n\`⬇️ 下载：\` \`%s\`\n\`⬆️ 上传：\` \`%s\`\n\`🧮 合计：\` \`%s GB\`\n\n\`📅 周期：\` \`%s ~ %s\`\n\`🔄 重置：\` \`每月 %s 号\`\n\`⏳ 累计：\` \`%s / %s GB%s\`\n\`🎯 进度：\` %s \`%d%%\`\n\n🕙 \`%s\`" \
+MSG=$(printf "📊 *流量日报 (%s)*\n*%s*\n\n\`🛜 地址：\` \`%s\`\n\`⬇️ 下载：\` \`%s\`\n\`⬆️ 上传：\` \`%s\`\n\`🧮 合计：\` \`%s GB\`\n\n\`📅 周期：\` \`%s ~ %s\`\n\`🔄 重置：\` \`每月 %s 号\`\n\`⏳ 累计：\` \`%s / %s GB%s\`\n\`🎯 进度：\` %s \`%d%%\`\n\n🕙 \`%s\`" \
 "$Y_DATE" "$HOST_ALIAS" "$SERVER_IP" "$DISP_RX" "$DISP_TX" "$TOTAL_YEST_GB" "$START_DATE" "$END_DATE" "$RESET_DAY" "$USED_GB" "$MAX_GB" "$REMARK" "$BAR" "$PCT" "$NOW")
 
 $CL --connect-timeout 10 --retry 3 -s -X POST "https://api.telegram.org/bot$TG_TOKEN/sendMessage" \
