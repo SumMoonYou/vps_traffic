@@ -1,11 +1,11 @@
 #!/bin/bash
 
 # =================================================================
-# 名称: 流量统计 & TG日报管理工具 (CentOS & Ubuntu 通用版)
-# 版本: v2.8
+# 名称: 流量统计
+# 版本: v3.0
 # =================================================================
 
-VERSION="v2.8"
+VERSION="v3.0"
 CONFIG_FILE="/etc/vnstat_tg.conf"
 BIN_PATH="/usr/local/bin/vnstat_tg_report.sh"
 
@@ -135,8 +135,7 @@ BAR=$(gen_bar $PCT)
 NOW=$(date "+%Y-%m-%d %H:%M")
 
 # 7. 构建消息并发往 Telegram
-MSG=$(printf "📊 *流量日报 (%s)*\n\n💻*主机：*%s\n🛜 *地址：* %s\n\n⬇️ *下载：* %s\n⬆️ *上传：* %s\n🧮 *合计：* %s GB\n\n📅 *周期：* %s ~ %s\n🔄 *重置：* 每月 %s 号\n⏳ *累计：* %s / %s GB%s\n🎯 *进度：* %s %d%%\n\n🕙 %s" \
-"$Y_DATE" \
+MSG=$(printf "📊 *流量日报*\n\n💻*主机：*%s\n🛜 *地址：* %s\n\n⬇️ *下载：* %s\n⬆️ *上传：* %s\n🧮 *合计：* %s GB\n\n📅 *周期：* %s ~ %s\n🔄 *重置：* 每月 %s 号\n⏳ *累计：* %s / %s GB%s\n🎯 *进度：* %s %d%%\n\n🕙 %s" \
 "$HOST_ALIAS" \
 "$SERVER_IP" \
 "$DISP_RX" \
