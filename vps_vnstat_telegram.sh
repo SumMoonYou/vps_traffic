@@ -142,7 +142,7 @@ BAR=$(gen_bar $PCT)
 NOW=$(date "+%Y-%m-%d %H:%M")
 
 # 7. 构建消息并发往 Telegram
-MSG=$(printf "📊 *流量日报 (%s)*\n\n💻*主机：*%s\n\n🛜 *地址：* %s\n⬇️ *下载：* %s\n⬆️ *上传：* %s\n🧮 *合计：* %s GB\n\n📅 *周期：* %s ~ %s\n🔄 *重置：* 每月 %s 号\n⏳ *累计：* %s / %s GB%s\n🎯 *进度：* %s %d%%\n\n🕙 %s" \
+MSG=$(printf "📊 *流量日报 (%s)*\n\n💻*主机：*%s\n🛜 *地址：* %s\n\n⬇️ *下载：* %s\n⬆️ *上传：* %s\n🧮 *合计：* %s GB\n\n📅 *周期：* %s ~ %s\n🔄 *重置：* 每月 %s 号\n⏳ *累计：* %s / %s GB%s\n🎯 *进度：* %s %d%%\n\n🕙 %s" \
 "$Y_DATE" \
 "$HOST_ALIAS" \
 "$SERVER_IP" \
