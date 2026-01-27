@@ -5,7 +5,7 @@
 # 版本: v2.5 
 # =================================================================
 
-VERSION="v2.4"
+VERSION="v2.5"
 CONFIG_FILE="/etc/vnstat_tg.conf"
 BIN_PATH="/usr/local/bin/vnstat_tg_report.sh"
 
