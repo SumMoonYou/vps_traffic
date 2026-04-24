@@ -1,11 +1,11 @@
 #!/bin/bash
 
 # =================================================================
-# 名称: 流量统计 & TG日报管理工具 (单位标准化版)
-# 版本: v3.2
+# 名称: 流量统计 & TG日报管理工具 (修复排版错位版)
+# 版本: v3.3
 # =================================================================
 
-VERSION="v3.2"
+VERSION="v3.3"
 CONFIG_FILE="/etc/vnstat_tg.conf"
 BIN_PATH="/usr/local/bin/vnstat_tg_report.sh"
 
@@ -51,123 +51,132 @@ generate_report_logic() {
     local VN_P=$(which vnstat)
     local CL_P=$(which curl)
 
-    cat <<EOF > $BIN_PATH
+    cat <<'EOF' > $BIN_PATH
 #!/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-BC="$BC_P"
-VN="$VN_P"
-CL="$CL_P"
+[ -f "/etc/vnstat_tg.conf" ] && source "/etc/vnstat_tg.conf" || exit 1
 
-[ -f "$CONFIG_FILE" ] && source "$CONFIG_FILE" || exit 1
-
-# 格式化输出函数：统一缩写
-format_unit() {
-    echo "\$1" | sed 's/iB//gI' | sed 's/B//gI' | xargs -I {} echo "{} \$2"
+# 统一单位缩写处理
+clean_unit() {
+    echo "$1" | sed 's/iB/B/g'
 }
 
+# 补全前导零
 fix_zero() {
-    local val=\$1
-    [[ \$val == .* ]] && val="0\$val"
-    echo "\$val" | sed 's/\.00\$//'
+    [[ $1 == .* ]] && echo "0$1" || echo "$1"
 }
 
 val_to_mb() {
-    local raw=\$(echo "\$1" | tr -d ' ' | tr '[:lower:]' '[:upper:]')
-    local num=\$(echo "\$raw" | grep -oE '[0-9.]+' | head -n1)
-    [ -z "\$num" ] && num=0
-    case "\$raw" in
-        *T*) echo "scale=2; \$num * 1048576" | \$BC ;;
-        *G*) echo "scale=2; \$num * 1024" | \$BC ;;
-        *K*) echo "scale=2; \$num / 1024" | \$BC ;;
-        *)   echo "\$num" ;;
+    local raw=$(echo "$1" | tr -d ' ' | tr '[:lower:]' '[:upper:]')
+    local num=$(echo "$raw" | grep -oE '[0-9.]+' | head -n1)
+    [ -z "$num" ] && num=0
+    case "$raw" in
+        *T*) echo "scale=2; $num * 1048576" | $BC ;;
+        *G*) echo "scale=2; $num * 1024" | $BC ;;
+        *K*) echo "scale=2; $num / 1024" | $BC ;;
+        *)   echo "$num" ;;
     esac
 }
 
 get_traffic() {
-    echo "\$1" | cut -c13- | grep -oE '[0-9.]+[[:space:]]*[a-zA-Z/]+' | sed -n "\${2}p" | xargs
+    echo "$1" | cut -c13- | grep -oE '[0-9.]+[[:space:]]*[a-zA-Z/]+' | sed -n "${2}p" | xargs
 }
 
-\$VN -i \$INTERFACE --update >/dev/null 2>&1
-SERVER_IP=\$(hostname -I | awk '{print \$1}')
+$VN -i $INTERFACE --update >/dev/null 2>&1
+SERVER_IP=$(hostname -I | awk '{print $1}')
 
-Y_D=\$(date -d "yesterday" "+%Y-%m-%d")
-Y_A1=\$(date -d "yesterday" "+%m/%d/%y")
-Y_A2=\$(date -d "yesterday" "+%d.%m.%y")
-Y_A3=\$(date -d "yesterday" "+%m/%d/%Y")
-RAW_LINE=\$($VN -d | grep -Ei "yesterday|\$Y_D|\$Y_A1|\$Y_A2|\$Y_A3")
+# 昨日数据匹配
+Y_D=$(date -d "yesterday" "+%Y-%m-%d")
+Y_A1=$(date -d "yesterday" "+%m/%d/%y")
+Y_A2=$(date -d "yesterday" "+%d.%m.%y")
+Y_A3=$(date -d "yesterday" "+%m/%d/%Y")
+RAW_LINE=$($VN -d | grep -Ei "yesterday|$Y_D|$Y_A1|$Y_A2|$Y_A3")
 
-if [ -n "\$RAW_LINE" ]; then
-    RX_STR=\$(get_traffic "\$RAW_LINE" 1)
-    TX_STR=\$(get_traffic "\$RAW_LINE" 2)
-    RX_MB=\$(val_to_mb "\$RX_STR")
-    TX_MB=\$(val_to_mb "\$TX_STR")
+if [ -n "$RAW_LINE" ]; then
+    RX_STR=$(get_traffic "$RAW_LINE" 1)
+    TX_STR=$(get_traffic "$RAW_LINE" 2)
+    RX_MB=$(val_to_mb "$RX_STR")
+    TX_MB=$(val_to_mb "$TX_STR")
     
-    TOTAL_YEST_MB=\$(echo "scale=2; \$RX_MB + \$TX_MB" | \$BC)
-    if [ \$(echo "\$TOTAL_YEST_MB < 1024" | \$BC) -eq 1 ]; then
-        TOTAL_YEST_DISP="\$(fix_zero \$TOTAL_YEST_MB) MB"
+    TOTAL_YEST_MB=$(echo "scale=2; $RX_MB + $TX_MB" | $BC)
+    if [ $(echo "$TOTAL_YEST_MB < 1024" | $BC) -eq 1 ]; then
+        TOTAL_YEST_DISP="$(fix_zero $TOTAL_YEST_MB) MB"
     else
-        TOTAL_YEST_GB=\$(echo "scale=2; \$TOTAL_YEST_MB / 1024" | \$BC)
-        TOTAL_YEST_DISP="\$(fix_zero \$TOTAL_YEST_GB) GB"
+        TOTAL_YEST_GB=$(echo "scale=2; $TOTAL_YEST_MB / 1024" | $BC)
+        TOTAL_YEST_DISP="$(fix_zero $TOTAL_YEST_GB) GB"
     fi
-    # 统一单位缩写
-    DISP_RX=\$(echo "\$RX_STR" | sed 's/iB/B/g')
-    DISP_TX=\$(echo "\$TX_STR" | sed 's/iB/B/g')
+    DISP_RX=$(clean_unit "$RX_STR")
+    DISP_TX=$(clean_unit "$TX_STR")
 else
     DISP_RX="0 MB"; DISP_TX="0 MB"; TOTAL_YEST_DISP="0 MB"
 fi
 
-# 周期统计逻辑
-TODAY_D=\$(date +%d | sed 's/^0//')
-THIS_Y=\$(date +%Y); THIS_M=\$(date +%m)
-if [ "\$TODAY_D" -lt "\$RESET_DAY" ]; then
-    START_DATE=\$(date -d "\${THIS_Y}-\${THIS_M}-\${RESET_DAY} -1 month" +%Y-%m-%d)
-    END_DATE=\$(date -d "\${THIS_Y}-\${THIS_M}-\${RESET_DAY} -1 day" +%Y-%m-%d)
+# 周期计算
+TODAY_D=$(date +%d | sed 's/^0//')
+THIS_Y=$(date +%Y); THIS_M=$(date +%m)
+if [ "$TODAY_D" -lt "$RESET_DAY" ]; then
+    START_DATE=$(date -d "${THIS_Y}-${THIS_M}-${RESET_DAY} -1 month" +%Y-%m-%d)
+    END_DATE=$(date -d "${THIS_Y}-${THIS_M}-${RESET_DAY} -1 day" +%Y-%m-%d)
 else
-    START_DATE=\$(date -d "\${THIS_Y}-\${THIS_M}-\${RESET_DAY}" +%Y-%m-%d)
-    END_DATE=\$(date -d "\${THIS_Y}-\${THIS_M}-\${RESET_DAY} +1 month -1 day" +%Y-%m-%d)
+    START_DATE=$(date -d "${THIS_Y}-${THIS_M}-${RESET_DAY}" +%Y-%m-%d)
+    END_DATE=$(date -d "${THIS_Y}-${THIS_M}-${RESET_DAY} +1 month -1 day" +%Y-%m-%d)
 fi
 
 TOTAL_PERIOD_MB=0
-CUR_TS=\$(date -d "\$START_DATE" +%s)
-YEST_TS=\$(date -d "yesterday" +%s)
-while [ "\$CUR_TS" -le "\$YEST_TS" ]; do
-    D_M1=\$(date -d "@\$CUR_TS" "+%Y-%m-%d")
-    D_M2=\$(date -d "@\$CUR_TS" "+%m/%d/%y")
-    D_M3=\$(date -d "@\$CUR_TS" "+%d.%m.%y")
-    D_M4=\$(date -d "@\$CUR_TS" "+%m/%d/%Y")
-    D_LINE=\$($VN -d | grep -E "\$D_M1|\$D_M2|\$D_M3|\$D_M4")
-    if [ -n "\$D_LINE" ]; then
-        D_RX_S=\$(get_traffic "\$D_LINE" 1)
-        D_TX_S=\$(get_traffic "\$D_LINE" 2)
-        TOTAL_PERIOD_MB=\$(echo "\$TOTAL_PERIOD_MB + \$(val_to_mb "\$D_RX_S") + \$(val_to_mb "\$D_RX_S")" | \$BC)
+CUR_TS=$(date -d "$START_DATE" +%s)
+YEST_TS=$(date -d "yesterday" +%s)
+while [ "$CUR_TS" -le "$YEST_TS" ]; do
+    D_DATE=$(date -d "@$CUR_TS" "+%Y-%m-%d")
+    D_LINE=$($VN -d | grep "$D_DATE")
+    if [ -n "$D_LINE" ]; then
+        D_RX_S=$(get_traffic "$D_LINE" 1)
+        D_TX_S=$(get_traffic "$D_LINE" 2)
+        TOTAL_PERIOD_MB=$(echo "$TOTAL_PERIOD_MB + $(val_to_mb "$D_RX_S") + $(val_to_mb "$D_TX_S")" | $BC)
     fi
-    CUR_TS=\$((CUR_TS + 86400))
+    CUR_TS=$((CUR_TS + 86400))
 done
 
-USED_GB=\$(echo "scale=2; \$TOTAL_PERIOD_MB / 1024" | \$BC)
-USED_GB_FIXED=\$(fix_zero \$USED_GB)
-PCT=\$(echo "scale=0; \$TOTAL_PERIOD_MB * 100 / (\$MAX_GB * 1024)" | \$BC 2>/dev/null)
-[ -z "\$PCT" ] && PCT=0
+USED_GB=$(echo "scale=2; $TOTAL_PERIOD_MB / 1024" | $BC)
+USED_GB_FIXED=$(fix_zero $USED_GB)
+PCT=$(echo "scale=0; $TOTAL_PERIOD_MB * 100 / ($MAX_GB * 1024)" | $BC 2>/dev/null)
+[ -z "$PCT" ] && PCT=0
 
 gen_bar() {
-    local p=\$1; local b=""; [ "\$p" -gt 100 ] && p=100
-    local c="🟩"; [ "\$p" -ge 50 ] && c="🟧"; [ "\$p" -ge 80 ] && c="🟥"
-    for ((i=0; i<p/10; i++)); do b+="\$c"; done
+    local p=$1; local b=""; [ "$p" -gt 100 ] && p=100
+    local c="🟩"; [ "$p" -ge 50 ] && c="🟧"; [ "$p" -ge 80 ] && c="🟥"
+    for ((i=0; i<p/10; i++)); do b+="$c"; done
     for ((i=p/10; i<10; i++)); do b+="⬜"; done
-    echo "\$b"
+    echo "$b"
 }
-BAR=\$(gen_bar \$PCT)
-NOW=\$(date "+%Y-%m-%d %H:%M")
+BAR=$(gen_bar $PCT)
+NOW=$(date "+%Y-%m-%d %H:%M")
 
-MSG=\$(printf "📊 *流量日报*\n\n💻主机：*%s*\n🛜 地址： \`%s\`\n\n⬇️ 下载： \`%s\`\n⬆️ 上传： \`%s\`\n🧮 合计： \`%s\`\n\n📅 周期： \`%s ~ %s\`\n🔄 重置： 每月 %s 号\n\n⏳ 累计： \`%s / %s GB\`\n🎯 进度： %s \`%d%%\`\n\n🕙 \`%s\`" \
-"\$HOST_ALIAS" "\$SERVER_IP" "\$DISP_RX" "\$DISP_TX" "\$TOTAL_YEST_DISP" "\$START_DATE" "\$END_DATE" "\$RESET_DAY" "\$USED_GB_FIXED" "\$MAX_GB" "\$BAR" "\$PCT" "\$NOW")
+# --- 消息构建 (弃用 printf 以免错位) ---
+MSG="📊 *流量日报*
 
-\$CL --connect-timeout 10 --retry 3 -s -X POST "https://api.telegram.org/bot\$TG_TOKEN/sendMessage" \
--d "chat_id=\$TG_CHAT_ID" \
--d "text=\$MSG" \
+💻 主机： *$HOST_ALIAS*
+🛜 地址： \`$SERVER_IP\`
+
+⬇️ 下载： \`$DISP_RX\`
+⬆️ 上传： \`$DISP_TX\`
+🧮 合计： \`$TOTAL_YEST_DISP\`
+
+📅 周期： \`$START_DATE ~ $END_DATE\`
+🔄 重置： 每月 $RESET_DAY 号
+
+⏳ 累计： \`$USED_GB_FIXED / $MAX_GB GB\`
+🎯 进度： $BAR \`$PCT%\`
+
+🕙 \`$NOW\`"
+
+$CL --connect-timeout 10 --retry 3 -s -X POST "https://api.telegram.org/bot$TG_TOKEN/sendMessage" \
+-d "chat_id=$TG_CHAT_ID" \
+-d "text=$MSG" \
 -d "parse_mode=Markdown" \
 -d "disable_notification=true" > /dev/null
 EOF
+    # 注入路径变量
+    sed -i "4i BC=\"$BC_P\"\nVN=\"$VN_P\"\nCL=\"$CL_P\"" $BIN_PATH
     chmod +x $BIN_PATH
 }
 
@@ -180,7 +189,6 @@ collect_config() {
     read -p "🆔 Chat ID [${TG_CHAT_ID}]: " input_val; TG_CHAT_ID=${input_val:-$TG_CHAT_ID}
     read -p "📅 重置日 (1-31) [${RESET_DAY:-1}]: " input_val; RESET_DAY=${input_val:-${RESET_DAY:-1}}
     read -p "📊 限额 (GB) [${MAX_GB:-1000}]: " input_val; MAX_GB=${input_val:-${MAX_GB:-1000}}
-
     IF_DEF=$(ip route | grep '^default' | awk '{print $5}' | head -n1)
     read -p "🌐 网卡 [${INTERFACE:-$IF_DEF}]: " input_val; INTERFACE=${input_val:-${INTERFACE:-$IF_DEF}}
     read -p "⏰ 时间 (HH:MM) [${RUN_TIME:-01:30}]: " input_val; RUN_TIME=${input_val:-${RUN_TIME:-01:30}}
@@ -209,7 +217,7 @@ while true; do
     echo "==========================================="
     echo " 1. 全新安装 (配置+逻辑)"
     echo " 2. 修改配置参数"
-    echo " 3. 仅更新脚本逻辑 (修复Bug/统一单位后选此项)"
+    echo " 3. 仅更新脚本逻辑 (修复Bug/排版)"
     echo " 4. 手动发送测试报表"
     echo " 5. 彻底卸载"
     echo " 6. 退出"
